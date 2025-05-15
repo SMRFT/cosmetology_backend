@@ -1368,6 +1368,7 @@ def upload_file(request):
         return HttpResponseBadRequest('No image files provided')
     return HttpResponseBadRequest('Invalid request method')
 
+
 @csrf_exempt
 def get_file(request):
     """

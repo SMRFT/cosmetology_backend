@@ -80,6 +80,7 @@ class Patient(models.Model):
     
 
 class Appointment(models.Model):
+    branch_code = models.CharField(max_length=50, blank=True, null=True)  # Add branch_code field
     patientUID = models.CharField(max_length=10)
     patientName = models.CharField(max_length=255)
     mobileNumber = models.CharField(max_length=11)
@@ -87,13 +88,13 @@ class Appointment(models.Model):
     appointmentDate = models.DateField()
     purposeOfVisit = models.CharField(max_length=500)
     gender = models.CharField(max_length=10)
-    branch_code = models.CharField(max_length=50, blank=True, null=True)  # Add branch_code field
 
     def __str__(self):
         return self.patientUID
 
 
 class SummaryDetail(models.Model):
+    branch_code = models.CharField(max_length=50, blank=True, null=True)  # Add branch_code field
     patientName = models.CharField(max_length=100)
     patientUID = models.CharField(max_length=100)
     mobileNumber = models.CharField(max_length=100)
@@ -118,6 +119,7 @@ class SummaryDetail(models.Model):
         return self.diagnosis
 
 class Visit(models.Model):
+    branch_code = models.CharField(max_length=50, blank=True, null=True)  # Add branch_code field
     patient = models.ForeignKey(Patient, on_delete=models.CASCADE)
     visit_date = models.DateTimeField(auto_now_add=True)
 
@@ -136,6 +138,7 @@ class Vital(models.Model):
         return f"{self.patientUID} - {self.recorded_at}"
 
 class BillingData(models.Model):
+    branch_code = models.CharField(max_length=50, blank=True, null=True)  # Add branch_code field
     patientUID = models.CharField(max_length=10)
     patientName = models.CharField(max_length=100)
     appointmentDate = models.CharField(max_length=500)
@@ -162,6 +165,7 @@ class Procedure(models.Model):
     procedure= models.CharField(max_length=500) 
 
 class ProcedureBill(models.Model):
+    branch_code = models.CharField(max_length=50, blank=True, null=True)  # Add branch_code field
     appointmentDate = models.CharField(max_length=255)
     patientName = models.CharField(max_length=255)
     patientUID = models.CharField(max_length=255)
