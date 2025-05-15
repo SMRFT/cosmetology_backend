@@ -18,6 +18,7 @@ class Login(models.Model):
 
 class Pharmacy(models.Model):
     medicine_name = models.CharField(max_length=255, unique=True)
+    branch_code = models.CharField(max_length=50, blank=True, null=True)  # Add branch_code field
     company_name = models.CharField(max_length=255,null=True, blank=True)
     price = models.CharField(max_length=255,null=True, blank=True)
     CGST_percentage = models.CharField(max_length=200,null=True, blank=True)
