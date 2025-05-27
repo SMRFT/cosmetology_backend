@@ -54,7 +54,7 @@ def login(request):
         endpoint = request.data.get('endpoint')
 
         try:
-            user = Register.objects.get(email=username, password=password)
+            user = Register.objects.get(id=username, password=password)
             
             # Extract branch code from the database
             branch_code = user.branch_code
@@ -99,7 +99,7 @@ def login(request):
                 'role': user.role,
                 'id': user.id,
                 'name': user.name, 
-                'email': user.email,
+                'contact': user.contact,
             }
             
             # Include branch codes in the response
@@ -123,11 +123,17 @@ def login(request):
 
         
 
-from .serializers import PharmacySerializer
+from rest_framework.decorators import api_view
+from rest_framework.response import Response
+from rest_framework import status
+from pymongo import MongoClient
 import logging
+from .models import Pharmacy
+from .serializers import PharmacySerializer
+
 logger = logging.getLogger(__name__)
 
-@api_view(['GET', 'POST', 'PUT'])
+@api_view(['GET', 'POST', 'PUT', 'PATCH'])
 def pharmacy_data(request):
     # Get branch_code from request parameters or cookies
     branch_code = request.query_params.get('branch_code') or request.COOKIES.get('branch_code')
@@ -157,7 +163,51 @@ def pharmacy_data(request):
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+    if request.method == 'PATCH':
+        response_data = []
+
+        if not isinstance(request.data, list):
+            request_data = [request.data]
+        else:
+            request_data = request.data
+
+        # MongoDB connection
+        client = MongoClient('mongodb+srv://smrftcosmo:smrft%402024@cluster0.lctyiq9.mongodb.net/?retryWrites=true&w=majority')
+        db = client['cosmetology']
+        pharmacy_collection = db.cosmetology_pharmacy
+
+        for data in request_data:
+            medicine_name = data.get('medicine_name')
+            batch_number = data.get('batch_number')
+
+            if not data.get('branch_code') and branch_code:
+                data['branch_code'] = branch_code
+
+            try:
+                result = pharmacy_collection.update_one(
+                    {
+                        "medicine_name": medicine_name,
+                        "batch_number": batch_number,
+                        "branch_code": data.get('branch_code')
+                    },
+                    {"$set": data},
+                    upsert=True
+                )
+
+                if result.matched_count > 0 or result.upserted_id:
+                    response_data.append(data)
+                else:
+                    logger.error(f"Failed to update document with medicine_name={medicine_name}, batch_number={batch_number}")
+                    return Response({'error': 'Failed to update the document.'}, status=status.HTTP_400_BAD_REQUEST)
+
+            except Exception as e:
+                logger.error(f"Error updating medicine {medicine_name} (batch {batch_number}): {str(e)}")
+                return Response({"detail": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        return Response(response_data, status=status.HTTP_200_OK)
+
     if request.method == 'PUT':
+        # If you still want to keep the full replace functionality 
         response_data = []
         client = MongoClient('mongodb+srv://smrftcosmo:smrft%402024@cluster0.lctyiq9.mongodb.net/?retryWrites=true&w=majority')
         db = client['cosmetology']
@@ -193,23 +243,41 @@ def pharmacy_data(request):
                 return Response({"detail": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
                 
         return Response(response_data, status=status.HTTP_200_OK)
+    
 
 
+from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
+from pymongo import MongoClient
+
+# Setup MongoDB client
+client = MongoClient('mongodb+srv://smrftcosmo:smrft%402024@cluster0.lctyiq9.mongodb.net/?retryWrites=true&w=majority')
+db = client['cosmetology']
+pharmacy_collection = db.cosmetology_pharmacy
+
 @require_http_methods(["DELETE"])
 @csrf_exempt
 def delete_medicine(request, medicine_name):
     branch_code = request.GET.get('branch_code') or request.COOKIES.get('branch_code')
-    
+
+    query = {
+        "medicine_name": medicine_name
+    }
+    if branch_code:
+        query["branch_code"] = branch_code
+
     try:
-        if branch_code:
-            medicine = Pharmacy.objects.get(medicine_name=medicine_name, branch_code=branch_code)
-        else:
-            medicine = Pharmacy.objects.get(medicine_name=medicine_name)
-        medicine.delete()
+        result = pharmacy_collection.delete_one(query)
+
+        if result.deleted_count == 0:
+            return JsonResponse({"error": "Medicine not found."}, status=404)
+
         return JsonResponse({"message": "Medicine deleted successfully."}, status=200)
-    except Pharmacy.DoesNotExist:
-        return JsonResponse({"error": "Medicine not found."}, status=404)
+
+    except Exception as e:
+        return JsonResponse({"error": f"Unexpected error: {str(e)}"}, status=500)
+
 
 
 from .serializers import PharmacyStockUpdateSerializer

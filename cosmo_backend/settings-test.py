@@ -85,23 +85,20 @@ WSGI_APPLICATION = 'cosmo_backend.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/3.2/ref/settings/#databases
 
+import os
 import certifi
+from dotenv import load_dotenv
+
+load_dotenv()  # Load environment variables from .env
 
 DATABASES = { 
     'default': {
         'ENGINE': 'djongo',
-        'NAME': 'cosmetology',
+        'NAME': os.getenv('MONGO_DB_NAME', 'cosmetology'),  # Default to 'cosmetology' if not set
         'ENFORCE_SCHEMA': False,
         'CLIENT': {
-            'host': 'mongodb+srv://smrftcosmo:smrft%402024@cluster0.lctyiq9.mongodb.net/?retryWrites=true&w=majority',
-            'tls': True,
-            'tlsCAFile': certifi.where(),
+            'host': os.getenv('GLOBAL_DB_HOST'),
         }  
-        # 'CLIENT': {
-        #     'host': 'mongodb://admin:ifS2nTs6vm@103.205.141.208:27017/',
-        #     'tls': True,
-        #     'tlsAllowInvalidCertificates': True,  # Skip cert validation
-        # }
     }
 }
 
