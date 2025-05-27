@@ -9,7 +9,7 @@ class Register(models.Model):
     name = models.CharField(max_length=500)
     role = models.CharField(max_length=500)
     branch_code = models.JSONField(default=list)  # Change to JSONField
-    email = models.EmailField(max_length=500, unique=True)
+    contact = models.CharField(max_length=500)
     password = models.CharField(max_length=500)
 
 class Login(models.Model):
@@ -17,8 +17,9 @@ class Login(models.Model):
     password = models.CharField(max_length=120)
 
 class Pharmacy(models.Model):
-    medicine_name = models.CharField(max_length=255, unique=True)
-    branch_code = models.CharField(max_length=50, blank=True, null=True)  # Add branch_code field
+    medicine_name = models.CharField(max_length=255)
+    branch_code = models.CharField(max_length=50, blank=True, null=True)  
+    medicine_category = models.CharField(max_length=50, null=True, blank=True)
     company_name = models.CharField(max_length=255,null=True, blank=True)
     price = models.CharField(max_length=255,null=True, blank=True)
     CGST_percentage = models.CharField(max_length=200,null=True, blank=True)

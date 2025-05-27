@@ -13,7 +13,7 @@ class RegisterSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = Register
-        fields = ['id', 'name', 'role', 'branch_code', 'email', 'password', 'confirmPassword']
+        fields = '__all__'
         extra_kwargs = {
             'password': {'write_only': True},
         }

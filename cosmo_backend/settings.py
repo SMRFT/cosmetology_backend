@@ -161,4 +161,5 @@ CORS_ALLOW_HEADERS = [
     'accept',
     'origin',
     'x-requested-with',
+    'X-Branch-Code'
 ]
