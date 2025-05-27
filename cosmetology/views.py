@@ -1,16 +1,50 @@
 from rest_framework.views import APIView
-from rest_framework.response import Response
-from pymongo import MongoClient
 from gridfs import GridFS
 from django.http import JsonResponse, HttpResponse, HttpResponseBadRequest
 from django.views.decorators.csrf import csrf_exempt
-from rest_framework.decorators import api_view
-from rest_framework import status
 from datetime import datetime, timedelta
 from django.utils import timezone
 import json
 from decimal import Decimal
 from bson.json_util import dumps, loads
+from .models import ProcedureBill
+from .serializers import ProcedureBillSerializer
+from .models import BillingData
+from .serializers import BillingDataSerializer
+from django.views.decorators.http import require_GET
+from rest_framework.decorators import api_view
+from rest_framework.response import Response
+from rest_framework import status
+from pymongo import MongoClient
+import logging
+
+
+from .models import Pharmacy
+from .models import Patient
+from .models import Appointment  
+from .serializers import VitalSerializer
+from .models import Vital
+from .models import Register
+from .serializers import PharmacyStockUpdateSerializer
+from .serializers import AppointmentSerializer
+from .serializers import PatientSerializer
+from .serializers import PharmacySerializer
+from .models import Diagnosis,Complaints,Findings,Tests,Procedure
+from .serializers import DiagnosisSerializer,ComplaintsSerializer,FindingsSerializer,TestsSerializer,ProcedureSerializer
+from .models import SummaryDetail
+from .serializers import SummaryDetailSerializer
+
+
+from datetime import datetime
+from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.http import require_http_methods
+from pymongo import MongoClient
+
+import os
+from dotenv import load_dotenv
+
+load_dotenv() 
 
 from .serializers import RegisterSerializer
 @api_view(['POST'])
@@ -25,7 +59,7 @@ def registration(request):
     
 
 # MongoDB connection setup
-client = MongoClient('mongodb+srv://smrftcosmo:smrft%402024@cluster0.lctyiq9.mongodb.net/?retryWrites=true&w=majority')
+client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
 db = client['cosmetology']
 branch_collection = db['cosmetology_branch']  
 
@@ -44,7 +78,7 @@ def get_branches(request):
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     
 
-from .models import Register
+
 @api_view(['POST'])
 @csrf_exempt
 def login(request):
@@ -123,13 +157,7 @@ def login(request):
 
         
 
-from rest_framework.decorators import api_view
-from rest_framework.response import Response
-from rest_framework import status
-from pymongo import MongoClient
-import logging
-from .models import Pharmacy
-from .serializers import PharmacySerializer
+
 
 logger = logging.getLogger(__name__)
 
@@ -172,7 +200,7 @@ def pharmacy_data(request):
             request_data = request.data
 
         # MongoDB connection
-        client = MongoClient('mongodb+srv://smrftcosmo:smrft%402024@cluster0.lctyiq9.mongodb.net/?retryWrites=true&w=majority')
+        client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
         db = client['cosmetology']
         pharmacy_collection = db.cosmetology_pharmacy
 
@@ -209,7 +237,7 @@ def pharmacy_data(request):
     if request.method == 'PUT':
         # If you still want to keep the full replace functionality 
         response_data = []
-        client = MongoClient('mongodb+srv://smrftcosmo:smrft%402024@cluster0.lctyiq9.mongodb.net/?retryWrites=true&w=majority')
+        client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
         db = client['cosmetology']
         pharmacy_collection = db.cosmetology_pharmacy
 
@@ -246,13 +274,10 @@ def pharmacy_data(request):
     
 
 
-from django.http import JsonResponse
-from django.views.decorators.csrf import csrf_exempt
-from django.views.decorators.http import require_http_methods
-from pymongo import MongoClient
+
 
 # Setup MongoDB client
-client = MongoClient('mongodb+srv://smrftcosmo:smrft%402024@cluster0.lctyiq9.mongodb.net/?retryWrites=true&w=majority')
+client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
 db = client['cosmetology']
 pharmacy_collection = db.cosmetology_pharmacy
 
@@ -280,7 +305,7 @@ def delete_medicine(request, medicine_name):
 
 
 
-from .serializers import PharmacyStockUpdateSerializer
+
 @api_view(['PUT'])
 def update_stock(request):
     if request.method == 'PUT':
@@ -294,7 +319,7 @@ def update_stock(request):
         try:
             qty = int(qty)  # Ensure qty is an integer
             # Correct MongoDB connection string
-            client = MongoClient('mongodb+srv://smrftcosmo:smrft%402024@cluster0.lctyiq9.mongodb.net/your_database_name?retryWrites=true&w=majority')
+            client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
             db = client['cosmetology']
             pharmacy_collection = db.cosmetology_pharmacy
             
@@ -336,7 +361,7 @@ def pharmacy_upload(request):
     return Response({'error': 'No file provided'}, status=status.HTTP_400_BAD_REQUEST)
 
 
-from .models import Pharmacy
+
 @api_view(['GET'])
 def check_medicine_status(request):
     branch_code = request.query_params.get('branch_code') or request.COOKIES.get('branch_code')
@@ -364,7 +389,7 @@ def check_medicine_status(request):
     return Response(response_data, status=status.HTTP_200_OK)
 
 
-from .serializers import PatientSerializer
+
 @api_view(['POST', 'PATCH', 'DELETE'])
 def Patients_data(request, patientUID=None):
     branch_code = request.data.get('branch_code') or request.COOKIES.get('branch_code')
@@ -415,7 +440,7 @@ def Patients_data(request, patientUID=None):
             return Response({"error": "Patient not found"}, status=status.HTTP_404_NOT_FOUND)
 
 
-from .models import Patient
+
 @api_view(['GET'])
 def PatientView(request):
     if request.method == 'GET':
@@ -431,7 +456,7 @@ def PatientView(request):
         return Response(serializer.data)
     
 
-from .serializers import AppointmentSerializer
+
 @api_view(['POST'])
 @csrf_exempt
 def Appointmentpost(request):
@@ -483,7 +508,7 @@ def Appointmentpost(request):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     
 
-from .models import Appointment    
+  
 @api_view(['GET'])
 def AppointmentView(request):
     if request.method == 'GET':
@@ -504,12 +529,10 @@ def AppointmentView(request):
         return Response(serializer.data)
     
 
-from .models import SummaryDetail
-from .serializers import SummaryDetailSerializer
-from datetime import datetime
+
 @api_view(['POST', 'GET', 'PATCH'])
 def SummaryDetailCreate(request):
-    client = MongoClient('mongodb+srv://smrftcosmo:smrft%402024@cluster0.lctyiq9.mongodb.net/your_database_name?retryWrites=true&w=majority')
+    client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
     db = client['cosmetology']
     collection = db['cosmetology_summarydetail']
     
@@ -729,8 +752,7 @@ def check_upcoming_visits(request):
     return JsonResponse(data)
 
 
-from .serializers import VitalSerializer
-from .models import Vital
+
 # Modified vitalform to support branch_code
 @api_view(['POST', 'GET'])
 @csrf_exempt
@@ -771,8 +793,7 @@ def vitalform(request):
         return Response({'status': 'success', 'vital': serializer.data})
     
 
-from .models import Diagnosis,Complaints,Findings,Tests,Procedure
-from .serializers import DiagnosisSerializer,ComplaintsSerializer,FindingsSerializer,TestsSerializer,ProcedureSerializer
+
 @api_view(['GET', 'POST'])
 def diagnosis_list(request):
     if request.method == 'GET':
@@ -863,10 +884,8 @@ def Procedure_list(request):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
  
 
-from .models import BillingData
-from .serializers import BillingDataSerializer
-from django.views.decorators.http import require_GET
-client = MongoClient('mongodb+srv://smrftcosmo:smrft%402024@cluster0.lctyiq9.mongodb.net/your_database_name?retryWrites=true&w=majority')
+
+client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
 db = client['cosmetology']
 collection = db['cosmetology_billingdata']
 @api_view(['POST'])
@@ -1085,8 +1104,7 @@ def delete_billing_data(request):
     return JsonResponse({'message': 'Method not allowed'}, status=405)
 
 
-from .models import ProcedureBill
-from .serializers import ProcedureBillSerializer
+
 # Update delete_procedure_data to use branch_code
 @require_http_methods(["DELETE"])
 @csrf_exempt
@@ -1402,7 +1420,7 @@ def medical_history(request):
 
 
 # Connect to MongoDB
-client = MongoClient('mongodb+srv://smrftcosmo:smrft%402024@cluster0.lctyiq9.mongodb.net/your_database_name?retryWrites=true&w=majority')
+client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
 db = client['cosmetology']
 fs = GridFS(db)
 
@@ -1448,7 +1466,7 @@ def get_file(request):
         HttpResponse: An HTTP response containing the file contents or a 404 error if the file is not found.
     """
     # Connect to MongoDB
-    client = MongoClient('mongodb+srv://smrftcosmo:smrft%402024@cluster0.lctyiq9.mongodb.net/your_database_name?retryWrites=true&w=majority')
+    client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
     db = client['cosmetology']
     fs = GridFS(db)
     
@@ -1517,7 +1535,7 @@ def get_pdf_file(request):
         HttpResponse: An HTTP response containing the PDF file contents or a 404 error if the file is not found.
     """
     # Connect to MongoDB
-    client = MongoClient('mongodb+srv://smrftcosmo:smrft%402024@cluster0.lctyiq9.mongodb.net/your_database_name?retryWrites=true&w=majority')
+    client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
     db = client['cosmetology']
     fs = GridFS(db)
 
