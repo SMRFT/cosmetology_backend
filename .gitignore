@@ -1,6 +1,6 @@
 env
 env/*
-.venv
+venv/
 .venv/*
 # Ignore macOS system files
 .DS_Store
@@ -11,5 +11,5 @@ env/*
 *.pyc
 **/*.pyc
 
-__pycache__/*
+__pycache__/
 */__pycache__/*
