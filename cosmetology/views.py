@@ -84,14 +84,15 @@ def login(request):
 
             # Check if the user is authorized for the endpoint
             # Check endpoint restrictions (Doctor can log in from any endpoint)
-            if user.role != 'Doctor':
-                if endpoint == 'PharmacistLogin' and user.role != 'Pharmacist':
+            if user.role != 'Admin':
+                if endpoint == 'AdminLogin' and user.role != 'Admin':
+                    return Response('Access denied', status=status.HTTP_403_FORBIDDEN)
+                elif endpoint == 'PharmacistLogin' and user.role != 'Pharmacist':
                     return Response('Access denied', status=status.HTTP_403_FORBIDDEN)
                 elif endpoint == 'ReceptionistLogin' and user.role != 'Receptionist':
                     return Response('Access denied', status=status.HTTP_403_FORBIDDEN)
                 elif endpoint == 'DoctorLogin' and user.role != 'Doctor':
                     return Response('Access denied', status=status.HTTP_403_FORBIDDEN)
-
 
             # Create response data
             response_data = {
