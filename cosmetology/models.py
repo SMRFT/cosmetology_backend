@@ -97,6 +97,7 @@ class Appointment(models.Model):
 
 class SummaryDetail(models.Model):
     branch_code = models.CharField(max_length=50, blank=True, null=True)  # Add branch_code field
+    patient_handledby = models.CharField(max_length=100)
     patientName = models.CharField(max_length=100)
     patientUID = models.CharField(max_length=100)
     mobileNumber = models.CharField(max_length=100)
