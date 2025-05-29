@@ -43,7 +43,7 @@ def get_branches(request):
     except Exception as e:
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     
-
+    
 from .models import Register
 @api_view(['POST'])
 @csrf_exempt
@@ -55,71 +55,60 @@ def login(request):
 
         try:
             user = Register.objects.get(id=username, password=password)
-            
-            # Extract branch code from the database
             branch_code = user.branch_code
             
-            # Parse branch codes - handle both string format "[code1, code2]" and list format
+            # Handle string or list branch_code
             branch_codes = []
             if isinstance(branch_code, str):
-                # Handle the JSON string format like "[\"SSC001\", \"SSC002\"]"
                 try:
-                    # Try to parse the JSON string
                     branch_codes = json.loads(branch_code)
                 except json.JSONDecodeError:
-                    # If it's not valid JSON but still has brackets, try to parse manually
                     if branch_code.startswith('[') and branch_code.endswith(']'):
-                        # Remove brackets and split by comma
                         codes_str = branch_code[1:-1].replace('"', '').replace("'", "")
                         branch_codes = [code.strip() for code in codes_str.split(',')]
                     else:
-                        # It's a single code
                         branch_codes = [branch_code]
             elif isinstance(branch_code, list):
-                # It's already a list
                 branch_codes = branch_code
+
+            # Login access rules
+            if user.role == 'Admin':
+                pass  # Admin can access any endpoint
+            elif user.role == 'Doctor':
+                if endpoint == 'AdminLogin':
+                    return Response('Access denied', status=status.HTTP_403_FORBIDDEN)
+            elif user.role == 'Receptionist':
+                if endpoint != 'ReceptionistLogin':
+                    return Response('Access denied', status=status.HTTP_403_FORBIDDEN)
+            elif user.role == 'Pharmacist':
+                if endpoint != 'PharmacistLogin':
+                    return Response('Access denied', status=status.HTTP_403_FORBIDDEN)
             else:
-                # Default to empty list
-                branch_codes = []
+                return Response('Access denied', status=status.HTTP_403_FORBIDDEN)
 
-            # Check if the user is authorized for the endpoint
-            # Check endpoint restrictions (Doctor can log in from any endpoint)
-            if user.role != 'Doctor':
-                if endpoint == 'PharmacistLogin' and user.role != 'Pharmacist':
-                    return Response('Access denied', status=status.HTTP_403_FORBIDDEN)
-                elif endpoint == 'ReceptionistLogin' and user.role != 'Receptionist':
-                    return Response('Access denied', status=status.HTTP_403_FORBIDDEN)
-                elif endpoint == 'DoctorLogin' and user.role != 'Doctor':
-                    return Response('Access denied', status=status.HTTP_403_FORBIDDEN)
-
-
-            # Create response data
+            # Construct response
             response_data = {
                 'message': 'Login successful',
                 'role': user.role,
                 'id': user.id,
-                'name': user.name, 
+                'name': user.name,
                 'contact': user.contact,
             }
-            
-            # Include branch codes in the response
+
             if len(branch_codes) == 1:
-                # Single branch - include as branch_code for backward compatibility
                 response_data['branch_code'] = branch_codes[0]
-            
-            # Always include the full list of branch codes
             response_data['branch_codes'] = branch_codes
-            
+
             response = Response(response_data, status=status.HTTP_200_OK)
-            
-            # Set a cookie only if there's a single branch code
+
             if len(branch_codes) == 1:
-                response.set_cookie('branch_code', branch_codes[0], max_age=7*24*60*60)  # 7 days
-                
+                response.set_cookie('branch_code', branch_codes[0], max_age=7*24*60*60)
+
             return response
-            
+
         except Register.DoesNotExist:
             return Response({'error': 'Invalid username or password'}, status=status.HTTP_401_UNAUTHORIZED)
+
 
         
 
