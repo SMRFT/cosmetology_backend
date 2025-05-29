@@ -71,11 +71,20 @@ def login(request):
             elif isinstance(branch_code, list):
                 branch_codes = branch_code
 
+
             # Login access rules
             if user.role == 'Admin':
                 pass  # Admin can access any endpoint
             elif user.role == 'Doctor':
                 if endpoint == 'AdminLogin':
+
+            # Check if the user is authorized for the endpoint
+            # Check endpoint restrictions (Doctor can log in from any endpoint)
+            if user.role != 'Admin':
+                if endpoint == 'AdminLogin' and user.role != 'Admin':
+                    return Response('Access denied', status=status.HTTP_403_FORBIDDEN)
+                elif endpoint == 'PharmacistLogin' and user.role != 'Pharmacist':
+
                     return Response('Access denied', status=status.HTTP_403_FORBIDDEN)
             elif user.role == 'Receptionist':
                 if endpoint != 'ReceptionistLogin':
@@ -86,7 +95,7 @@ def login(request):
             else:
                 return Response('Access denied', status=status.HTTP_403_FORBIDDEN)
 
-            # Construct response
+
             response_data = {
                 'message': 'Login successful',
                 'role': user.role,
