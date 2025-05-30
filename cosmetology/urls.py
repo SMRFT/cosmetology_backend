@@ -1,4 +1,4 @@
-from django.urls import path
+from django.urls import path , re_path
 from . import views
 
 urlpatterns = [
@@ -6,7 +6,7 @@ urlpatterns = [
     path('login/', views.login, name='login'),
     path('branches/', views.get_branches, name='get_branches'),
     path('pharmacy/data/', views.pharmacy_data, name='pharmacy_data'),
-    path('pharmacy/data/<str:medicine_name>/', views.delete_medicine, name='delete_medicine'),
+    re_path(r'^pharmacy/data/(?P<medicine_name>[^/]+)/$', views.delete_medicine, name='delete_medicine'),
     path('update_stock/', views.update_stock, name='update_stock'),
     path('pharmacy/upload/', views.pharmacy_upload, name='pharmacy_upload'),
     path('check_medicine_status/', views.check_medicine_status, name='check_medicine_status'),
@@ -41,8 +41,5 @@ urlpatterns = [
     path('upload_pdf/', views.upload_pdf, name='upload_pdf'),
     path('delete_procedure_data/', views.delete_procedure_data, name='delete_procedure_data'),
     path('get_pdf_file/', views.get_pdf_file, name='get_pdf_file'),
-
-
-
 
 ]
