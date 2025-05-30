@@ -1,9 +1,15 @@
 env
 env/*
+
 venv/
 .venv/*
+=======
+.venv
+venv/*
+
 # Ignore macOS system files
 .DS_Store
+venv/
 
 # Ignore environment variables
 .env
@@ -11,5 +17,13 @@ venv/
 *.pyc
 **/*.pyc
 
+
 __pycache__/
 */__pycache__/*
+=======
+__pycache__/*
+*/__pycache__/*
+
+__pycache__/
+*.pyc
+

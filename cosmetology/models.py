@@ -4,7 +4,25 @@ from datetime import timedelta,datetime
 from dateutil.parser import parse
 from django.db import models
 import re
-class Register(models.Model):
+
+class AuditModel(models.Model):
+    created_by = models.CharField(max_length=100, blank=True, null=True)
+    created_date = models.DateTimeField(auto_now_add=True)
+    lastmodified_by = models.CharField(max_length=100, blank=True, null=True)
+    lastmodified_date = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        abstract = True
+
+    def save(self, *args, **kwargs):
+        if not self.created_by:
+            self.created_by = "system"
+        self.lastmodified_by = self.lastmodified_by or "system"
+        super().save(*args, **kwargs)
+
+
+
+class Register(AuditModel):
     id = models.CharField(max_length=500, primary_key=True)
     name = models.CharField(max_length=500)
     role = models.CharField(max_length=500)
@@ -16,7 +34,7 @@ class Login(models.Model):
     username = models.CharField(max_length=150)
     password = models.CharField(max_length=120)
 
-class Pharmacy(models.Model):
+class Pharmacy(AuditModel):
     medicine_name = models.CharField(max_length=255)
     branch_code = models.CharField(max_length=50, blank=True, null=True)  
     medicine_category = models.CharField(max_length=50, null=True, blank=True)
@@ -55,7 +73,7 @@ class Pharmacy(models.Model):
             # Handle invalid dates gracefully
             return False
 
-class Patient(models.Model):
+class Patient(AuditModel):
     branch_code = models.CharField(max_length=50, blank=True, null=True)  # Add branch_code field
     patientName = models.CharField(max_length=255)  # Mandatory
     mobileNumber = models.CharField(max_length=11)  # Mandatory
@@ -81,7 +99,7 @@ class Patient(models.Model):
         return self.patientName
     
 
-class Appointment(models.Model):
+class Appointment(AuditModel):
     branch_code = models.CharField(max_length=50, blank=True, null=True)  # Add branch_code field
     patientUID = models.CharField(max_length=10)
     patientName = models.CharField(max_length=255)
@@ -95,7 +113,7 @@ class Appointment(models.Model):
         return self.patientUID
 
 
-class SummaryDetail(models.Model):
+class SummaryDetail(AuditModel):
     branch_code = models.CharField(max_length=50, blank=True, null=True)  # Add branch_code field
     patient_handledby = models.CharField(max_length=100)
     patientName = models.CharField(max_length=100)
@@ -121,12 +139,12 @@ class SummaryDetail(models.Model):
     def __str__(self):
         return self.diagnosis
 
-class Visit(models.Model):
+class Visit(AuditModel):
     branch_code = models.CharField(max_length=50, blank=True, null=True)  # Add branch_code field
     patient = models.ForeignKey(Patient, on_delete=models.CASCADE)
     visit_date = models.DateTimeField(auto_now_add=True)
 
-class Vital(models.Model):
+class Vital(AuditModel):
     branch_code = models.CharField(max_length=50, blank=True, null=True)  # Add branch_code field
     patientUID = models.CharField(max_length=10)
     patientName = models.CharField(max_length=100)
@@ -140,7 +158,7 @@ class Vital(models.Model):
     def __str__(self):
         return f"{self.patientUID} - {self.recorded_at}"
 
-class BillingData(models.Model):
+class BillingData(AuditModel):
     branch_code = models.CharField(max_length=50, blank=True, null=True)  # Add branch_code field
     patient_handledby = models.CharField(max_length=100)
     patientUID = models.CharField(max_length=10)
@@ -153,22 +171,22 @@ class BillingData(models.Model):
     billNumber = models.CharField(max_length=50)
 
 
-class Diagnosis(models.Model):
+class Diagnosis(AuditModel):
     diagnosis= models.CharField(max_length=100)
 
-class Complaints(models.Model):
+class Complaints(AuditModel):
     complaints= models.CharField(max_length=100)
 
-class Findings(models.Model):
+class Findings(AuditModel):
     findings= models.CharField(max_length=100)
 
-class Tests(models.Model):
+class Tests(AuditModel):
     test= models.CharField(max_length=500)
 
-class Procedure(models.Model):
+class Procedure(AuditModel):
     procedure= models.CharField(max_length=500) 
 
-class ProcedureBill(models.Model):
+class ProcedureBill(AuditModel):
     branch_code = models.CharField(max_length=50, blank=True, null=True)  # Add branch_code field
     patient_handledby = models.CharField(max_length=100)
     appointmentDate = models.CharField(max_length=255)
