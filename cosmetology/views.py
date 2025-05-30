@@ -887,6 +887,7 @@ def save_billing_data(request):
             data = json.loads(request.body)
             patientUID = data.get('patientUID')
             patientName = data.get('patientName')
+            patient_handledby = data.get('patient_handledby')
             date = data.get('appointmentDate')
             table_data = data.get('table_data')
             netAmount = data.get('netAmount')
@@ -914,6 +915,7 @@ def save_billing_data(request):
                 patientUID=patientUID,
                 patientName=patientName,
                 appointmentDate=date,
+                patient_handledby=patient_handledby,
                 table_data=table_data,
                 netAmount=netAmount,
                 discount=discount,
@@ -1317,6 +1319,8 @@ def get_procedures_bill(request):
                     'patientUID': patient_uid,
                     'patientName': detail.patientName,
                     'appointmentDate': detail.appointmentDate,
+                    'patient_handledby':detail.patient_handledby,
+
                     'procedures': []
                 }
             for procedure in procedures:
@@ -1346,6 +1350,7 @@ def post_procedures_bill(request):
         patientUID = data.get('patientUID')
         patientName = data.get('patientName')
         appointmentDate = data.get('appointmentDate')
+        patient_handledby = data.get('patient_handledby')
         procedures = data.get('procedures')  # Ensure this is a valid JSON object
         procedureNetAmount = data.get('procedureNetAmount')
         consumerNetAmount = data.get('consumerNetAmount')
@@ -1370,6 +1375,7 @@ def post_procedures_bill(request):
             patientUID=patientUID,
             patientName=patientName,
             appointmentDate=appointmentDate,
+            patient_handledby=patient_handledby,
             procedures=procedures,
             procedureNetAmount=procedureNetAmount,
             consumerNetAmount=consumerNetAmount,
