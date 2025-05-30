@@ -88,7 +88,7 @@ def login(request):
         endpoint = request.data.get('endpoint')
 
         try:
-            user = Register.objects.get(name=username, password=password)
+            user = Register.objects.get(id=username, password=password)
             
             # Extract branch code from the database
             branch_code = user.branch_code
