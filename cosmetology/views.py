@@ -47,15 +47,23 @@ from dotenv import load_dotenv
 load_dotenv() 
 
 from .serializers import RegisterSerializer
-@api_view(['POST'])
+from django.db import DatabaseError
+
 @csrf_exempt
+@api_view(['POST'])
 def registration(request):
     if request.method == 'POST':
         serializer = RegisterSerializer(data=request.data)
         if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
+            try:
+                serializer.save()
+                return Response(serializer.data, status=status.HTTP_201_CREATED)
+            except DatabaseError as e:
+                import traceback
+                print(traceback.format_exc())  # Logs the full traceback
+                return Response({'error': 'Database error occurred.', 'details': str(e)}, status=500)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
     
 
 # MongoDB connection setup
