@@ -4,6 +4,11 @@ from django.http import JsonResponse, HttpResponse, HttpResponseBadRequest
 from django.views.decorators.csrf import csrf_exempt
 from datetime import datetime, timedelta
 from django.utils import timezone
+from datetime import datetime
+from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.http import require_http_methods
+from pymongo import MongoClient
 import json
 from decimal import Decimal
 from bson.json_util import dumps, loads
@@ -33,13 +38,6 @@ from .models import Diagnosis,Complaints,Findings,Tests,Procedure
 from .serializers import DiagnosisSerializer,ComplaintsSerializer,FindingsSerializer,TestsSerializer,ProcedureSerializer
 from .models import SummaryDetail
 from .serializers import SummaryDetailSerializer
-
-
-from datetime import datetime
-from django.http import JsonResponse
-from django.views.decorators.csrf import csrf_exempt
-from django.views.decorators.http import require_http_methods
-from pymongo import MongoClient
 
 import os
 from dotenv import load_dotenv
