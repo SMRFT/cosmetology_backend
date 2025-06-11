@@ -2,12 +2,14 @@
 from rest_framework import serializers
 from .models import Register
 from bson import ObjectId
+
 class ObjectIdField(serializers.Field):
     def to_representation(self, value):
         return str(value)
     def to_internal_value(self, data):
         return ObjectId(data)
     
+
 class RegisterSerializer(serializers.ModelSerializer):
     confirmPassword = serializers.CharField(write_only=True)
     
@@ -24,14 +26,34 @@ class RegisterSerializer(serializers.ModelSerializer):
         return data
     
     def create(self, validated_data):
-        # Remove confirmPassword as it's not a model field
         validated_data.pop('confirmPassword')
-        # Consider hashing the password here
+        
+        # Convert branch_code array to objects with isactive status
+        if 'branch_code' in validated_data and isinstance(validated_data['branch_code'], list):
+            branch_objects = []
+            for branch_code in validated_data['branch_code']:
+                if isinstance(branch_code, str):
+                    # Convert string to object format
+                    branch_objects.append({
+                        'branch_code': branch_code,
+                        'isactive': True  # Default to active when registering
+                    })
+                elif isinstance(branch_code, dict):
+                    # Already in object format
+                    branch_objects.append(branch_code)
+            validated_data['branch_code'] = branch_objects
+        
         return Register.objects.create(**validated_data)
+
+class BranchStatusSerializer(serializers.Serializer):
+    user_id = serializers.CharField()
+    branch_code = serializers.CharField()
+    isactive = serializers.BooleanField()
     
     
 from .models import Login
 class LoginSerializer(serializers.ModelSerializer):
+    id = ObjectIdField(read_only=True)
     class Meta:
         model =   Login
         fields = '__all__'
@@ -96,6 +118,14 @@ class BillingDataSerializer(serializers.ModelSerializer):
         fields = '__all__'
 
 
+from .models import ProcedureBill
+class ProcedureBillSerializer(serializers.ModelSerializer):
+     id = ObjectIdField(read_only=True)
+     class Meta:
+        model = ProcedureBill
+        fields = '__all__'
+
+
 from .models import Diagnosis,Complaints,Findings,Tests,Procedure
 class DiagnosisSerializer(serializers.ModelSerializer):
      id = ObjectIdField(read_only=True)
@@ -128,9 +158,3 @@ class ProcedureSerializer(serializers.ModelSerializer):
         fields = '__all__'
 
 
-from .models import ProcedureBill
-class ProcedureBillSerializer(serializers.ModelSerializer):
-     id = ObjectIdField(read_only=True)
-     class Meta:
-        model = ProcedureBill
-        fields = '__all__'

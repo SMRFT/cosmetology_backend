@@ -25,7 +25,7 @@ SECRET_KEY = 'django-insecure-^++i9_0$54xip#wtj3c#4qt&p1q2)q=n8difm*gjwsl49dc1na
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = ['test.shinova.in', 'localhost','shinova.in']
+ALLOWED_HOSTS = ['test.shinova.in', 'localhost','shinova.in',"shinova.in1.cloudlets.co.in"]
 
 
 # Application definition
@@ -147,7 +147,7 @@ STATIC_URL = '/static/'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 CORS_ALLOWED_ORIGINS = [
-    "http://localhost:3000","http://localhost:3001"
+    "http://localhost:3000","http://localhost:3001","https://salemcosmeticclinic.shinova.in","https://salemcosmeticclinic.netlify.app",
 ]
 
 CORS_ALLOW_CREDENTIALS = True

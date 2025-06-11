@@ -21,7 +21,6 @@ class AuditModel(models.Model):
         super().save(*args, **kwargs)
 
 
-
 class Register(AuditModel):
     id = models.CharField(max_length=500, primary_key=True)
     name = models.CharField(max_length=500)
@@ -29,10 +28,24 @@ class Register(AuditModel):
     branch_code = models.JSONField(default=list)  # Change to JSONField
     contact = models.CharField(max_length=500)
     password = models.CharField(max_length=500)
+    
+    def get_active_branches(self):
+        """Get list of active branch codes"""
+        if isinstance(self.branch_code, list):
+            return [branch['branch_code'] for branch in self.branch_code if branch.get('isactive', False)]
+        return []
+    
+    def get_all_branches(self):
+        """Get all branch codes regardless of active status"""
+        if isinstance(self.branch_code, list):
+            return [branch['branch_code'] for branch in self.branch_code]
+        return []
+
 
 class Login(models.Model):
     username = models.CharField(max_length=150)
     password = models.CharField(max_length=120)
+
 
 class Pharmacy(AuditModel):
     medicine_name = models.CharField(max_length=255)
@@ -73,6 +86,7 @@ class Pharmacy(AuditModel):
             # Handle invalid dates gracefully
             return False
 
+
 class Patient(AuditModel):
     branch_code = models.CharField(max_length=50, blank=True, null=True)  # Add branch_code field
     patientName = models.CharField(max_length=255)  # Mandatory
@@ -108,6 +122,7 @@ class Appointment(AuditModel):
     appointmentDate = models.DateField()
     purposeOfVisit = models.CharField(max_length=500)
     gender = models.CharField(max_length=10)
+    patient_handledby = models.CharField(max_length=100)
 
     def __str__(self):
         return self.patientUID
@@ -139,10 +154,12 @@ class SummaryDetail(AuditModel):
     def __str__(self):
         return self.diagnosis
 
+
 class Visit(AuditModel):
     branch_code = models.CharField(max_length=50, blank=True, null=True)  # Add branch_code field
     patient = models.ForeignKey(Patient, on_delete=models.CASCADE)
     visit_date = models.DateTimeField(auto_now_add=True)
+
 
 class Vital(AuditModel):
     branch_code = models.CharField(max_length=50, blank=True, null=True)  # Add branch_code field
@@ -157,6 +174,7 @@ class Vital(AuditModel):
 
     def __str__(self):
         return f"{self.patientUID} - {self.recorded_at}"
+
 
 class BillingData(AuditModel):
     branch_code = models.CharField(max_length=50, blank=True, null=True)  # Add branch_code field
@@ -186,6 +204,7 @@ class Tests(AuditModel):
 class Procedure(AuditModel):
     procedure= models.CharField(max_length=500) 
 
+
 class ProcedureBill(AuditModel):
     branch_code = models.CharField(max_length=50, blank=True, null=True)  # Add branch_code field
     patient_handledby = models.CharField(max_length=100)
@@ -196,7 +215,6 @@ class ProcedureBill(AuditModel):
     procedureNetAmount = models.CharField(max_length=255)
     consumerNetAmount = models.CharField(max_length=255)
     consumer = models.JSONField()
-
     # Add paymentType and billNumber for both consumer and procedure
     PaymentType = models.CharField(max_length=10, choices=[('Cash', 'Cash'), ('Card', 'Card')])
     consumerBillNumber = models.CharField(max_length=50)

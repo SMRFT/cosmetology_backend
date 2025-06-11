@@ -4,6 +4,11 @@ from django.http import JsonResponse, HttpResponse, HttpResponseBadRequest
 from django.views.decorators.csrf import csrf_exempt
 from datetime import datetime, timedelta
 from django.utils import timezone
+from datetime import datetime
+from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.http import require_http_methods
+from pymongo import MongoClient
 import json
 from decimal import Decimal
 from bson.json_util import dumps, loads
@@ -17,7 +22,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from pymongo import MongoClient
 import logging
-
+import traceback
 
 from .models import Pharmacy
 from .models import Patient
@@ -34,29 +39,188 @@ from .serializers import DiagnosisSerializer,ComplaintsSerializer,FindingsSerial
 from .models import SummaryDetail
 from .serializers import SummaryDetailSerializer
 
-
-from datetime import datetime
-from django.http import JsonResponse
-from django.views.decorators.csrf import csrf_exempt
-from django.views.decorators.http import require_http_methods
-from pymongo import MongoClient
-
 import os
 from dotenv import load_dotenv
 
 load_dotenv() 
 
 from .serializers import RegisterSerializer
-@api_view(['POST'])
+from django.db import DatabaseError
+
 @csrf_exempt
+@api_view(['GET', 'POST'])
 def registration(request):
     if request.method == 'POST':
         serializer = RegisterSerializer(data=request.data)
         if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
+            try:
+                serializer.save()
+                return Response(serializer.data, status=status.HTTP_201_CREATED)
+            except DatabaseError as e:
+                print(traceback.format_exc())
+                return Response({'error': 'Database error occurred.', 'details': str(e)}, status=500)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    elif request.method == 'GET':
+        users = Register.objects.all()
+        serializer = RegisterSerializer(users, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
     
+
+@api_view(['POST'])
+@csrf_exempt
+def login(request):
+    if request.method == 'POST':
+        username = request.data.get('username')
+        password = request.data.get('password')
+        endpoint = request.data.get('endpoint')
+
+        try:
+            user = Register.objects.get(id=username, password=password)
+            
+            # Extract branch code from the database
+            branch_code = user.branch_code
+            
+            # Parse branch codes - handle both old string format and new object format
+            branch_codes = []
+            active_branches = []
+            
+            if isinstance(branch_code, str):
+                # Handle old JSON string format
+                try:
+                    branch_codes_data = json.loads(branch_code)
+                    if isinstance(branch_codes_data, list):
+                        for item in branch_codes_data:
+                            if isinstance(item, str):
+                                branch_codes.append(item)
+                                active_branches.append(item)  # Assume active for old format
+                            elif isinstance(item, dict):
+                                branch_codes.append(item['branch_code'])
+                                if item.get('isactive', False):
+                                    active_branches.append(item['branch_code'])
+                except json.JSONDecodeError:
+                    if branch_code.startswith('[') and branch_code.endswith(']'):
+                        codes_str = branch_code[1:-1].replace('"', '').replace("'", "")
+                        branch_codes = [code.strip() for code in codes_str.split(',')]
+                        active_branches = branch_codes  # Assume all active for old format
+                    else:
+                        branch_codes = [branch_code]
+                        active_branches = [branch_code]
+            elif isinstance(branch_code, list):
+                # New object format
+                for item in branch_code:
+                    if isinstance(item, dict):
+                        branch_codes.append(item['branch_code'])
+                        if item.get('isactive', False):
+                            active_branches.append(item['branch_code'])
+                    elif isinstance(item, str):
+                        branch_codes.append(item)
+                        active_branches.append(item)  # Assume active for string items
+            else:
+                branch_codes = []
+                active_branches = []
+
+            # Check endpoint restrictions
+            if user.role != 'Admin':
+                if endpoint == 'AdminLogin' and user.role != 'Admin':
+                    return Response('Access denied', status=status.HTTP_403_FORBIDDEN)
+                elif endpoint == 'PharmacistLogin' and user.role != 'Pharmacist':
+                    return Response('Access denied', status=status.HTTP_403_FORBIDDEN)
+                elif endpoint == 'ReceptionistLogin' and user.role != 'Receptionist':
+                    return Response('Access denied', status=status.HTTP_403_FORBIDDEN)
+                elif endpoint == 'DoctorLogin' and user.role != 'Doctor':
+                    return Response('Access denied', status=status.HTTP_403_FORBIDDEN)
+                elif endpoint == 'ManagerLogin' and user.role != 'Manager':
+                    return Response('Access denied', status=status.HTTP_403_FORBIDDEN)
+
+            # Create response data
+            response_data = {
+                'message': 'Login successful',
+                'role': user.role,
+                'id': user.id,
+                'name': user.name, 
+                'contact': user.contact,
+                'branch_codes': active_branches,  # Only return active branches
+                'all_branches': branch_codes,     # All branches for management
+            }
+            
+            # Include single branch code for backward compatibility
+            if len(active_branches) == 1:
+                response_data['branch_code'] = active_branches[0]
+            
+            response = Response(response_data, status=status.HTTP_200_OK)
+            
+            # Set cookie only if there's a single active branch
+            if len(active_branches) == 1:
+                response.set_cookie('branch_code', active_branches[0], max_age=7*24*60*60)
+                
+            return response
+            
+        except Register.DoesNotExist:
+            return Response({'error': 'Invalid username or password'}, status=status.HTTP_401_UNAUTHORIZED)
+
+
+from .serializers import BranchStatusSerializer
+@api_view(['POST'])
+@csrf_exempt
+def toggle_branch_status(request):
+    """Toggle the active status of a branch for a user"""
+    if request.method == 'POST':
+        serializer = BranchStatusSerializer(data=request.data)
+        if serializer.is_valid():
+            user_id = serializer.validated_data['user_id']
+            branch_code = serializer.validated_data['branch_code']
+            new_status = serializer.validated_data['isactive']
+            
+            try:
+                user = Register.objects.get(id=user_id)
+                
+                # Update the branch status
+                updated_branches = []
+                branch_found = False
+                
+                for branch in user.branch_code:
+                    if isinstance(branch, dict) and branch['branch_code'] == branch_code:
+                        updated_branches.append({
+                            'branch_code': branch_code,
+                            'isactive': new_status
+                        })
+                        branch_found = True
+                    else:
+                        updated_branches.append(branch)
+                
+                if not branch_found:
+                    return Response({'error': 'Branch not found for user'}, status=status.HTTP_404_NOT_FOUND)
+                
+                user.branch_code = updated_branches
+                user.save()
+                
+                return Response({
+                    'message': 'Branch status updated successfully',
+                    'branch_code': branch_code,
+                    'isactive': new_status
+                }, status=status.HTTP_200_OK)
+                
+            except Register.DoesNotExist:
+                return Response({'error': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
+            except Exception as e:
+                return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+@api_view(['GET'])
+def get_user_branches(request, user_id):
+    """Get all branches for a user with their active status"""
+    try:
+        user = Register.objects.get(id=user_id)
+        return Response({
+            'user_id': user.id,
+            'name': user.name,
+            'branches': user.branch_code
+        }, status=status.HTTP_200_OK)
+    except Register.DoesNotExist:
+        return Response({'error': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
+
 
 # MongoDB connection setup
 client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
@@ -77,143 +241,98 @@ def get_branches(request):
     except Exception as e:
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     
-    
-from .models import Register
-@api_view(['POST'])
-@csrf_exempt
-def login(request):
-    if request.method == 'POST':
-        username = request.data.get('username')
-        password = request.data.get('password')
-        endpoint = request.data.get('endpoint')
-
-        try:
-            user = Register.objects.get(name=username, password=password)
-            
-            # Extract branch code from the database
-            branch_code = user.branch_code
-            
-            # Parse branch codes - handle both string format "[code1, code2]" and list format
-            branch_codes = []
-            if isinstance(branch_code, str):
-                # Handle the JSON string format like "[\"SSC001\", \"SSC002\"]"
-                try:
-                    # Try to parse the JSON string
-                    branch_codes = json.loads(branch_code)
-                except json.JSONDecodeError:
-                    # If it's not valid JSON but still has brackets, try to parse manually
-                    if branch_code.startswith('[') and branch_code.endswith(']'):
-                        # Remove brackets and split by comma
-                        codes_str = branch_code[1:-1].replace('"', '').replace("'", "")
-                        branch_codes = [code.strip() for code in codes_str.split(',')]
-                    else:
-                        # It's a single code
-                        branch_codes = [branch_code]
-            elif isinstance(branch_code, list):
-                # It's already a list
-                branch_codes = branch_code
-            else:
-                # Default to empty list
-                branch_codes = []
-
-            # Check if the user is authorized for the endpoint
-            # Check endpoint restrictions (Doctor can log in from any endpoint)
-            if user.role != 'Admin':
-                if endpoint == 'AdminLogin' and user.role != 'Admin':
-                    return Response('Access denied', status=status.HTTP_403_FORBIDDEN)
-                elif endpoint == 'PharmacistLogin' and user.role != 'Pharmacist':
-                    return Response('Access denied', status=status.HTTP_403_FORBIDDEN)
-                elif endpoint == 'ReceptionistLogin' and user.role != 'Receptionist':
-                    return Response('Access denied', status=status.HTTP_403_FORBIDDEN)
-                elif endpoint == 'DoctorLogin' and user.role != 'Doctor':
-                    return Response('Access denied', status=status.HTTP_403_FORBIDDEN)
-
-            # Create response data
-            response_data = {
-                'message': 'Login successful',
-                'role': user.role,
-                'id': user.id,
-                'name': user.name, 
-                'contact': user.contact,
-            }
-            
-            # Include branch codes in the response
-            if len(branch_codes) == 1:
-                # Single branch - include as branch_code for backward compatibility
-                response_data['branch_code'] = branch_codes[0]
-            
-            # Always include the full list of branch codes
-            response_data['branch_codes'] = branch_codes
-            
-            response = Response(response_data, status=status.HTTP_200_OK)
-            
-            # Set a cookie only if there's a single branch code
-            if len(branch_codes) == 1:
-                response.set_cookie('branch_code', branch_codes[0], max_age=7*24*60*60)  # 7 days
-                
-            return response
-            
-        except Register.DoesNotExist:
-            return Response({'error': 'Invalid username or password'}, status=status.HTTP_401_UNAUTHORIZED)
-
-
-        
-
-
 
 logger = logging.getLogger(__name__)
 
-@api_view(['GET', 'POST', 'PUT', 'PATCH'])
+@api_view(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'])
 def pharmacy_data(request):
     # Get branch_code from request parameters or cookies
     branch_code = request.query_params.get('branch_code') or request.COOKIES.get('branch_code')
     
+    # MongoDB connection
+    client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+    db = client['cosmetology']
+    pharmacy_collection = db.cosmetology_pharmacy
+
     if request.method == 'GET':
-        # With branch code filtering
-        if branch_code:
-            medicines = Pharmacy.objects.filter(branch_code=branch_code)
-        else:
-            medicines = Pharmacy.objects.all()
-        serializer = PharmacySerializer(medicines, many=True)
-        return Response(serializer.data)
+        try:
+            query_filter = {}
+            if branch_code:
+                query_filter['branch_code'] = branch_code
+
+            medicines = list(pharmacy_collection.find(query_filter))
+            for medicine in medicines:
+                medicine['_id'] = str(medicine['_id'])
+
+            return Response(medicines, status=status.HTTP_200_OK)
+        except Exception as e:
+            logger.error(f"Error fetching pharmacy data: {str(e)}")
+            return Response({"detail": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     if request.method == 'POST':
-        # Add branch_code to each item if it's not present
-        if isinstance(request.data, list):
-            for item in request.data:
+        try:
+            items_to_process = request.data if isinstance(request.data, list) else [request.data]
+            inserted_ids = []
+            updated_count = 0
+
+            for item in items_to_process:
                 if not item.get('branch_code') and branch_code:
                     item['branch_code'] = branch_code
-        else:
-            if not request.data.get('branch_code') and branch_code:
-                request.data['branch_code'] = branch_code
-                
-        serializer = PharmacySerializer(data=request.data, many=True)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+                item['created_at'] = datetime.now()
+                item['updated_at'] = datetime.now()
+
+                existing_record = pharmacy_collection.find_one({
+                    "medicine_name": item.get("medicine_name"),
+                    "batch_number": item.get("batch_number"),
+                    "branch_code": item.get("branch_code")
+                })
+
+                if existing_record:
+                    pharmacy_collection.update_one(
+                        {"_id": existing_record["_id"]},
+                        {"$set": item}
+                    )
+                    updated_count += 1
+                else:
+                    result = pharmacy_collection.insert_one(item)
+                    inserted_ids.append(str(result.inserted_id))
+
+            return Response({
+                "message": f"Processed {len(items_to_process)} records — {len(inserted_ids)} inserted, {updated_count} updated.",
+                "inserted_ids": inserted_ids
+            }, status=status.HTTP_201_CREATED)
+
+        except Exception as e:
+            logger.error(f"Error creating pharmacy data: {str(e)}")
+            return Response({"detail": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     if request.method == 'PATCH':
-        response_data = []
+        try:
+            response_data = []
 
-        if not isinstance(request.data, list):
-            request_data = [request.data]
-        else:
-            request_data = request.data
+            request_data = request.data if isinstance(request.data, list) else [request.data]
 
-        # MongoDB connection
-        client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
-        db = client['cosmetology']
-        pharmacy_collection = db.cosmetology_pharmacy
+            for data in request_data:
+                medicine_name = data.get('medicine_name')
+                batch_number = data.get('batch_number')
 
-        for data in request_data:
-            medicine_name = data.get('medicine_name')
-            batch_number = data.get('batch_number')
+                if not data.get('branch_code') and branch_code:
+                    data['branch_code'] = branch_code
 
-            if not data.get('branch_code') and branch_code:
-                data['branch_code'] = branch_code
+                data['updated_at'] = datetime.now()
 
-            try:
+                if 'new_stock' in data and data['new_stock']:
+                    existing_record = pharmacy_collection.find_one({
+                        "medicine_name": medicine_name,
+                        "batch_number": batch_number,
+                        "branch_code": data.get('branch_code')
+                    })
+                    if existing_record:
+                        current_old_stock = existing_record.get('old_stock', 0)
+                        new_stock_value = int(data.get('new_stock', 0))
+                        data['old_stock'] = current_old_stock + new_stock_value
+                        data['new_stock'] = 0
+
                 result = pharmacy_collection.update_one(
                     {
                         "medicine_name": medicine_name,
@@ -225,56 +344,85 @@ def pharmacy_data(request):
                 )
 
                 if result.matched_count > 0 or result.upserted_id:
-                    response_data.append(data)
+                    updated_doc = pharmacy_collection.find_one({
+                        "medicine_name": medicine_name,
+                        "batch_number": batch_number,
+                        "branch_code": data.get('branch_code')
+                    })
+                    if updated_doc:
+                        updated_doc['_id'] = str(updated_doc['_id'])
+                        response_data.append(updated_doc)
                 else:
                     logger.error(f"Failed to update document with medicine_name={medicine_name}, batch_number={batch_number}")
                     return Response({'error': 'Failed to update the document.'}, status=status.HTTP_400_BAD_REQUEST)
 
-            except Exception as e:
-                logger.error(f"Error updating medicine {medicine_name} (batch {batch_number}): {str(e)}")
-                return Response({"detail": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response(response_data, status=status.HTTP_200_OK)
 
-        return Response(response_data, status=status.HTTP_200_OK)
+        except Exception as e:
+            logger.error(f"Error updating pharmacy data: {str(e)}")
+            return Response({"detail": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    if request.method == 'DELETE':
+        try:
+            medicine_name = request.query_params.get('medicine_name')
+            batch_number = request.query_params.get('batch_number')
+
+            if not medicine_name or not batch_number:
+                return Response({'error': 'medicine_name and batch_number are required'}, status=status.HTTP_400_BAD_REQUEST)
+
+            result = pharmacy_collection.delete_one({
+                "medicine_name": medicine_name,
+                "batch_number": batch_number,
+                "branch_code": branch_code
+            })
+
+            if result.deleted_count > 0:
+                return Response({'message': 'Record deleted successfully'}, status=status.HTTP_200_OK)
+            else:
+                return Response({'error': 'Record not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        except Exception as e:
+            logger.error(f"Error deleting pharmacy data: {str(e)}")
+            return Response({"detail": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     if request.method == 'PUT':
-        # If you still want to keep the full replace functionality 
-        response_data = []
-        client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
-        db = client['cosmetology']
-        pharmacy_collection = db.cosmetology_pharmacy
+        try:
+            request_data = request.data if isinstance(request.data, list) else [request.data]
+            response_data = []
 
-        # Clear existing data based on branch_code if provided
-        if branch_code:
-            pharmacy_collection.delete_many({'branch_code': branch_code})
-        else:
-            pharmacy_collection.delete_many({})
+            for data in request_data:
+                if not data.get('branch_code') and branch_code:
+                    data['branch_code'] = branch_code
 
-        for data in request.data:
-            # Add branch_code to data if not present
-            if not data.get('branch_code') and branch_code:
-                data['branch_code'] = branch_code
-                
-            medicine_name = data.get('medicine_name')
-            batch_number = data.get('batch_number')
-            try:
-                # Update or upsert the document in MongoDB
-                result = pharmacy_collection.update_one(
-                    {'medicine_name': medicine_name, 'batch_number': batch_number, 'branch_code': data.get('branch_code')},
-                    {'$set': data},
-                    upsert=True
-                )
-                if result.upserted_id or result.modified_count > 0:
-                    response_data.append(data)
+
+
+                medicine_name = data.get('medicine_name')
+                batch_number = data.get('batch_number')
+
+                existing_record = pharmacy_collection.find_one({
+                    "medicine_name": medicine_name,
+                    "batch_number": batch_number,
+                    "branch_code": data.get('branch_code')
+                })
+
+                if existing_record:
+                    pharmacy_collection.update_one(
+                        {"_id": existing_record["_id"]},
+                        {"$set": data}
+                    )
+                    updated_doc = pharmacy_collection.find_one({"_id": existing_record["_id"]})
+                    updated_doc['_id'] = str(updated_doc['_id'])
+                    response_data.append(updated_doc)
                 else:
-                    logger.error(f"Failed to update document with medicine_name={medicine_name} and batch_number={batch_number}")
-                    return Response({'error': 'Failed to update the document.'}, status=status.HTTP_400_BAD_REQUEST)
-            except Exception as e:
-                logger.error(f"Unexpected error for medicine_name={medicine_name} and batch_number={batch_number}: {e}")
-                return Response({"detail": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-                
-        return Response(response_data, status=status.HTTP_200_OK)
-    
+                    result = pharmacy_collection.insert_one(data)
+                    data['_id'] = str(result.inserted_id)
+                    response_data.append(data)
 
+            return Response(response_data, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            logger.error(f"Error replacing pharmacy data: {str(e)}")
+            return Response({"detail": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 
@@ -304,8 +452,6 @@ def delete_medicine(request, medicine_name):
 
     except Exception as e:
         return JsonResponse({"error": f"Unexpected error: {str(e)}"}, status=500)
-
-
 
 
 @api_view(['PUT'])
@@ -363,7 +509,6 @@ def pharmacy_upload(request):
     return Response({'error': 'No file provided'}, status=status.HTTP_400_BAD_REQUEST)
 
 
-
 @api_view(['GET'])
 def check_medicine_status(request):
     branch_code = request.query_params.get('branch_code') or request.COOKIES.get('branch_code')
@@ -389,7 +534,6 @@ def check_medicine_status(request):
     }
 
     return Response(response_data, status=status.HTTP_200_OK)
-
 
 
 @api_view(['POST', 'PATCH', 'DELETE'])
@@ -442,7 +586,6 @@ def Patients_data(request, patientUID=None):
             return Response({"error": "Patient not found"}, status=status.HTTP_404_NOT_FOUND)
 
 
-
 @api_view(['GET'])
 def PatientView(request):
     if request.method == 'GET':
@@ -457,7 +600,6 @@ def PatientView(request):
         serializer = PatientSerializer(patients, many=True)
         return Response(serializer.data)
     
-
 
 @api_view(['POST'])
 @csrf_exempt
@@ -510,43 +652,89 @@ def Appointmentpost(request):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     
 
-  
+@csrf_exempt
+@api_view(['GET'])
+def get_doctors(request):
+    """
+    API endpoint to get doctors filtered by branch_code
+    """
+    if request.method == 'GET':
+        try:
+            # Get branch_code from request parameters or cookies
+            branch_code = request.query_params.get('branch_code') or request.COOKIES.get('branch_code')
+            
+            # MongoDB connection (assuming you're using pymongo)
+            from pymongo import MongoClient
+            
+            client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+            db = client['cosmetology']
+            collection = db['cosmetology_register']
+            
+            # Build query filter
+            query_filter = {"role": "Doctor"}
+            
+            if branch_code:
+                # If branch_code is provided, filter by it
+                query_filter["branch_code"] = {"$in": [branch_code]}
+            
+            # Fetch doctors from MongoDB
+            doctors = list(collection.find(query_filter, {
+                "_id": 0,  # Exclude MongoDB _id field
+                "id": 1,
+                "name": 1,
+                "role": 1,
+                "branch_code": 1,
+                "contact": 1
+            }))
+            
+            return Response({
+                "success": True,
+                "doctors": doctors,
+                "count": len(doctors)
+            }, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            return Response({
+                "success": False,
+                "error": "Failed to fetch doctors",
+                "details": str(e)
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+# Updated Appointment View to include doctor filtering
 @api_view(['GET'])
 def AppointmentView(request):
     if request.method == 'GET':
-        # Get branch_code from request parameters or cookies
+        # Get branch_code and doctor filter from request parameters
         branch_code = request.query_params.get('branch_code') or request.COOKIES.get('branch_code')
+        doctor_name = request.query_params.get('doctor_name')
         
-        # If branch code is provided, filter by it
+        # Start with base queryset
+        data = Appointment.objects.all()
+        
+        # Filter by branch code if provided
         if branch_code:
-            data = Appointment.objects.filter(branch_code=branch_code)
-        else:
-            # Optional: Return error if no branch code is provided
-            # return Response({"error": "Branch code is required"}, status=status.HTTP_400_BAD_REQUEST)
-            
-            # Or return all appointments if no branch code filtering is needed
-            data = Appointment.objects.all()
+            data = data.filter(branch_code=branch_code)
+        
+        # Filter by doctor name if provided
+        if doctor_name:
+            data = data.filter(patient_handledby=doctor_name)
             
         serializer = AppointmentSerializer(data, many=True)
         return Response(serializer.data)
-    
-
+        
 
 @api_view(['POST', 'GET', 'PATCH'])
 def SummaryDetailCreate(request):
     client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
     db = client['cosmetology']
     collection = db['cosmetology_summarydetail']
-    
     # Get branch_code from request or cookies
     branch_code = request.data.get('branch_code') or request.query_params.get('branch_code') or request.COOKIES.get('branch_code')
-    
     if request.method == 'POST':
         try:
             # Add branch_code to request data if not present
             if not request.data.get('branch_code') and branch_code:
                 request.data['branch_code'] = branch_code
-                
             serializer = SummaryDetailSerializer(data=request.data)
             if serializer.is_valid():
                 serializer.save()
@@ -554,87 +742,93 @@ def SummaryDetailCreate(request):
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
-
     elif request.method == 'GET':
         try:
             date_str = request.GET.get('appointmentDate')
             date = datetime.strptime(date_str, '%Y-%m-%d').date()
-            
             # Query SummaryDetail objects based on date and branch_code if provided
             if branch_code:
                 summaries = SummaryDetail.objects.filter(appointmentDate=date, branch_code=branch_code)
             else:
                 summaries = SummaryDetail.objects.filter(appointmentDate=date)
-            
             # Serialize the queryset
             serializer = SummaryDetailSerializer(summaries, many=True)
-            
             return Response(serializer.data, status=status.HTTP_200_OK)
-        
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
-
-
     elif request.method == 'PATCH':
         try:
             date_str = request.data.get('appointmentDate')
             patientUID = request.data.get('patientUID')
-
             # Validate required fields
             if not date_str or not patientUID:
                 return Response({'error': 'Both appointmentDate and patientUID are required'}, status=status.HTTP_400_BAD_REQUEST)
-
             date = datetime.strptime(date_str, '%Y-%m-%d').date()
-
             # Query to find the existing document, including branch_code if provided
             query = {"appointmentDate": str(date), "patientUID": patientUID}
             if branch_code:
                 query["branch_code"] = branch_code
-                
             existing_document = collection.find_one(query)
-
             if not existing_document:
                 return Response({'error': 'No matching summary data found'}, status=status.HTTP_404_NOT_FOUND)
-
-            # Merge existing data with new data
-            updated_data = {**existing_document, **request.data}
-            
+            # Create updated data starting with existing document
+            updated_data = existing_document.copy()
             # Ensure branch_code is preserved
             if not updated_data.get('branch_code') and branch_code:
                 updated_data['branch_code'] = branch_code
-
-            # Safely append data for string fields without redundant commas
-            def append_field(existing_value, new_value):
-                if existing_value and new_value:
-                    # Only add a comma if there is a value in both the existing and new values
-                    if existing_value.endswith(","):
-                        return f"{existing_value.strip()}, {new_value.strip()}"
-                    return f"{existing_value.strip()}, {new_value.strip()}"
-                elif existing_value:
-                    return existing_value.strip()  # return the existing value if new value is empty
-                return new_value.strip() if new_value else ""  # return the new value if existing value is empty
-
-            if "diagnosis" in request.data:
-                updated_data["diagnosis"] = append_field(existing_document.get("diagnosis", ""), request.data["diagnosis"])
-
-            if "findings" in request.data:
-                updated_data["findings"] = append_field(existing_document.get("findings", ""), request.data["findings"])
-
+            # Handle prescription field - replace instead of append
             if "prescription" in request.data:
-                updated_data["prescription"] = append_field(existing_document.get("prescription", ""), request.data["prescription"])
-
+                # Directly replace the prescription field with new data
+                updated_data["prescription"] = request.data["prescription"]
+            # Handle other fields with append logic
+            def append_field(existing_value, new_value):
+                if not new_value or new_value.strip() == "":
+                    return existing_value or ""
+                if not existing_value or existing_value.strip() == "":
+                    return new_value.strip()
+                # Clean existing value and new value
+                existing_clean = existing_value.strip()
+                new_clean = new_value.strip()
+                # Check if new value already exists in existing value
+                if new_clean in existing_clean:
+                    return existing_clean
+                # Add comma if existing doesn't end with comma
+                if existing_clean.endswith(","):
+                    return f"{existing_clean} {new_clean}"
+                else:
+                    return f"{existing_clean}, {new_clean}"
+            # Apply append logic to other fields
+            if "diagnosis" in request.data:
+                updated_data["diagnosis"] = append_field(
+                    existing_document.get("diagnosis", ""),
+                    request.data["diagnosis"]
+                )
+            if "findings" in request.data:
+                updated_data["findings"] = append_field(
+                    existing_document.get("findings", ""),
+                    request.data["findings"]
+                )
             if "tests" in request.data:
-                updated_data["tests"] = append_field(existing_document.get("tests", ""), request.data["tests"])
-
-            updated_data.pop('_id', None)  # Remove '_id' to avoid conflicts during update
-
+                updated_data["tests"] = append_field(
+                    existing_document.get("tests", ""),
+                    request.data["tests"]
+                )
+            # Handle other fields that should be directly updated (not appended)
+            direct_update_fields = [
+                'complaints', 'plans', 'nextVisit', 'vital', 'proceduresList',
+                'patient_handledby', 'patientName', 'mobileNumber'
+            ]
+            for field in direct_update_fields:
+                if field in request.data:
+                    updated_data[field] = request.data[field]
+            # Remove '_id' to avoid conflicts during update
+            updated_data.pop('_id', None)
             # Update the document
             collection.update_one(query, {"$set": updated_data})
-
             # Fetch the updated document
             updated_document = collection.find_one(query)
-            updated_document['_id'] = str(updated_document['_id'])  # Convert ObjectId to string
-
+            if updated_document and '_id' in updated_document:
+                updated_document['_id'] = str(updated_document['_id'])  # Convert ObjectId to string
             return Response(updated_document, status=status.HTTP_200_OK)
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
@@ -754,8 +948,6 @@ def check_upcoming_visits(request):
     return JsonResponse(data)
 
 
-
-# Modified vitalform to support branch_code
 @api_view(['POST', 'GET'])
 @csrf_exempt
 def vitalform(request):
@@ -794,7 +986,6 @@ def vitalform(request):
         serializer = VitalSerializer(vitals, many=True)
         return Response({'status': 'success', 'vital': serializer.data})
     
-
 
 @api_view(['GET', 'POST'])
 def diagnosis_list(request):
@@ -885,7 +1076,6 @@ def Procedure_list(request):
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
  
-
 
 client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
 db = client['cosmetology']
@@ -1037,7 +1227,6 @@ def summary_get(request):
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 
-# Update update_billing_data to use branch_code
 @api_view(['PUT'])
 @csrf_exempt
 def update_billing_data(request):
@@ -1074,7 +1263,6 @@ def update_billing_data(request):
         return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 
-# Update delete_billing_data to use branch_code
 @require_http_methods(["DELETE"])
 @csrf_exempt
 def delete_billing_data(request):
@@ -1108,8 +1296,6 @@ def delete_billing_data(request):
     return JsonResponse({'message': 'Method not allowed'}, status=405)
 
 
-
-# Update delete_procedure_data to use branch_code
 @require_http_methods(["DELETE"])
 @csrf_exempt
 def delete_procedure_data(request):
@@ -1163,7 +1349,6 @@ def delete_procedure_data(request):
     return JsonResponse({'message': 'Method not allowed'}, status=405)
 
 
-# Update get_summary_by_interval to use branch_code
 @api_view(['GET'])
 @csrf_exempt
 def get_summary_by_interval(request, interval):
@@ -1204,7 +1389,6 @@ def get_summary_by_interval(request, interval):
     return JsonResponse(serializer.data, safe=False)
 
 
-# Update get_billing_by_interval to use branch_code
 @api_view(['GET'])
 def get_billing_by_interval(request, interval):
     date_str = request.GET.get('appointmentDate')
@@ -1249,7 +1433,6 @@ def get_billing_by_interval(request, interval):
     return JsonResponse({'billing_data': serializer.data}, safe=False)
 
 
-# Update get_procedurebilling_by_interval to use branch_code
 @api_view(['GET'])
 @csrf_exempt
 def get_procedurebilling_by_interval(request, interval):
@@ -1295,7 +1478,6 @@ def get_procedurebilling_by_interval(request, interval):
     return JsonResponse(serializer.data, safe=False)
 
 
-# Update get_procedures_bill to use branch_code
 @require_GET
 def get_procedures_bill(request):
     date_str = request.GET.get('appointmentDate')
@@ -1353,7 +1535,6 @@ def get_procedures_bill(request):
         return JsonResponse({'error': 'Invalid date format'}, status=400)
 
 
-# Update post_procedures_bill to use branch_code
 @api_view(['POST'])
 def post_procedures_bill(request):
     try:
@@ -1403,7 +1584,6 @@ def post_procedures_bill(request):
         return JsonResponse({'error': str(e)}, status=400)
 
 
-# Update medical_history to use branch_code
 @csrf_exempt
 def medical_history(request):
     if request.method == 'POST':
@@ -1425,7 +1605,6 @@ def medical_history(request):
             
         return JsonResponse(list(patient_details), safe=False)
         
-
 
 # Connect to MongoDB
 client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
@@ -1502,6 +1681,7 @@ def get_file(request):
         # Return a 404 error if the file is not found
         return HttpResponse(status=404)
 
+
 @csrf_exempt
 def upload_pdf(request):
     if request.method == 'POST':
@@ -1531,6 +1711,7 @@ def upload_pdf(request):
             return HttpResponse(f'PDFs uploaded successfully: {", ".join(uploaded_files)}')
         return HttpResponseBadRequest('No PDF files provided')
     return HttpResponseBadRequest('Invalid request method')
+
 
 @csrf_exempt
 def get_pdf_file(request):

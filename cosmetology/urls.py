@@ -16,6 +16,7 @@ urlpatterns = [
     path('patients/<str:patientUID>/', views.PatientView, name='patient-detail'),
     path('Appointmentpost/', views.Appointmentpost, name='Appointmentpost'),
     path('AppointmentView/', views.AppointmentView, name='AppointmentView'),
+    path('get_doctors/', views.get_doctors, name='get_doctors'),
     path('summary/post/', views.SummaryDetailCreate, name='summary-create'),
     path('summary/post/patient_details/', views.PatientDetailsView, name='patient-details'),
     path('summary_get/', views.summary_get, name='summary_get'),
@@ -41,5 +42,6 @@ urlpatterns = [
     path('upload_pdf/', views.upload_pdf, name='upload_pdf'),
     path('delete_procedure_data/', views.delete_procedure_data, name='delete_procedure_data'),
     path('get_pdf_file/', views.get_pdf_file, name='get_pdf_file'),
-
+    path('toggle-branch-status/', views.toggle_branch_status, name='toggle_branch_status'),
+    path('user-branches/<str:user_id>/', views.get_user_branches, name='get_user_branches'),
 ]
