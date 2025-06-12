@@ -656,47 +656,42 @@ def Appointmentpost(request):
 @api_view(['GET'])
 def get_doctors(request):
     """
-    API endpoint to get doctors filtered by branch_code
+    API endpoint to get users filtered by role (Doctor or Admin) and optionally by branch_code
     """
     if request.method == 'GET':
         try:
-            # Get branch_code from request parameters or cookies
-            branch_code = request.query_params.get('branch_code') or request.COOKIES.get('branch_code')
-            
-            # MongoDB connection (assuming you're using pymongo)
             from pymongo import MongoClient
-            
+            import os
+            # Get branch_code from query params or cookies
+            branch_code = request.query_params.get('branch_code') or request.COOKIES.get('branch_code')
+            # Connect to MongoDB
             client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
             db = client['cosmetology']
             collection = db['cosmetology_register']
-            
             # Build query filter
-            query_filter = {"role": "Doctor"}
-            
+            query_filter = {
+                "role": {"$in": ["Doctor", "Admin"]}
+            }
             if branch_code:
-                # If branch_code is provided, filter by it
                 query_filter["branch_code"] = {"$in": [branch_code]}
-            
-            # Fetch doctors from MongoDB
+            # Fetch from DB
             doctors = list(collection.find(query_filter, {
-                "_id": 0,  # Exclude MongoDB _id field
+                "_id": 0,
                 "id": 1,
                 "name": 1,
                 "role": 1,
                 "branch_code": 1,
                 "contact": 1
             }))
-            
             return Response({
                 "success": True,
                 "doctors": doctors,
                 "count": len(doctors)
             }, status=status.HTTP_200_OK)
-            
         except Exception as e:
             return Response({
                 "success": False,
-                "error": "Failed to fetch doctors",
+                "error": "Failed to fetch doctors and admins",
                 "details": str(e)
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -1354,7 +1349,7 @@ def delete_procedure_data(request):
 def get_summary_by_interval(request, interval):
     date_str = request.GET.get('appointmentDate')
     branch_code = request.GET.get('branch_code') or request.COOKIES.get('branch_code')
-    
+
     if not date_str:
         return JsonResponse({'error': 'Date parameter is missing'}, status=400)
 
@@ -1368,25 +1363,32 @@ def get_summary_by_interval(request, interval):
         end_date = selected_date
     elif interval == 'month':
         start_date = selected_date.replace(day=1)
-        # Determine the end of the month
         next_month = (start_date + timedelta(days=31)).replace(day=1)
         end_date = next_month - timedelta(days=1)
     else:
         return JsonResponse({'error': 'Invalid interval'}, status=400)
 
-    # Filter with branch_code if available
-    if branch_code:
+    # Debugging
+    print("Branch Code:", branch_code)
+    print("Date range:", start_date, end_date)
+
+    # Clean and filter
+    if branch_code and branch_code.lower() != "null":
+        branch_code = branch_code.strip()
         summaries = SummaryDetail.objects.filter(
             appointmentDate__range=(start_date, end_date),
-            branch_code=branch_code
-        )
+            branch_code__iexact=branch_code
+        ).exclude(branch_code__isnull=True).exclude(branch_code='')
     else:
         summaries = SummaryDetail.objects.filter(
             appointmentDate__range=(start_date, end_date)
         )
-        
+
+
+    print("Filtered count:", summaries.count())
     serializer = SummaryDetailSerializer(summaries, many=True)
     return JsonResponse(serializer.data, safe=False)
+
 
 
 @api_view(['GET'])
