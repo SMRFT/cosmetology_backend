@@ -57,8 +57,7 @@ class Pharmacy(AuditModel):
     CGST_value = models.CharField(max_length=200,null=True, blank=True)
     SGST_percentage = models.CharField(max_length=200,null=True, blank=True)
     SGST_value = models.CharField(max_length=200,null=True, blank=True)
-    new_stock = models.IntegerField(null=True, blank=True)
-    old_stock = models.IntegerField(null=True, blank=True)
+    stock = models.IntegerField(null=True, blank=True)
     received_date = models.DateField(null=True, blank=True)
     expiry_date = models.DateField(null=True, blank=True)
     batch_number = models.CharField(max_length=255,null=True, blank=True)
@@ -68,9 +67,9 @@ class Pharmacy(AuditModel):
 
     def is_quantity_low(self):
         # Ensure old_stock is not None before comparison
-        if self.old_stock is None:
+        if self.stock is None:
             return False
-        return self.old_stock <= 15
+        return self.stock <= 15
 
     def is_expiry_near(self):
         try:
