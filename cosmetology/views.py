@@ -9,6 +9,7 @@ from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 from pymongo import MongoClient
+from bson.objectid import ObjectId
 import json
 from decimal import Decimal
 from bson.json_util import dumps, loads
@@ -74,6 +75,13 @@ def login(request):
         username = request.data.get('username')
         password = request.data.get('password')
         endpoint = request.data.get('endpoint')
+
+        if not username:
+            return Response({'error': 'Username is required'}, status=status.HTTP_400_BAD_REQUEST)
+        if not password:
+            return Response({'error': 'Password is required'}, status=status.HTTP_400_BAD_REQUEST)
+        if not endpoint:
+            return Response({'error': 'Endpoint is required'}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
             user = Register.objects.get(id=username, password=password)
@@ -148,13 +156,7 @@ def login(request):
             if len(active_branches) == 1:
                 response_data['branch_code'] = active_branches[0]
             
-            response = Response(response_data, status=status.HTTP_200_OK)
-            
-            # Set cookie only if there's a single active branch
-            if len(active_branches) == 1:
-                response.set_cookie('branch_code', active_branches[0], max_age=7*24*60*60)
-                
-            return response
+            return Response(response_data, status=status.HTTP_200_OK)
             
         except Register.DoesNotExist:
             return Response({'error': 'Invalid username or password'}, status=status.HTTP_401_UNAUTHORIZED)
@@ -211,6 +213,9 @@ def toggle_branch_status(request):
 @api_view(['GET'])
 def get_user_branches(request, user_id):
     """Get all branches for a user with their active status"""
+    if not user_id:
+        return Response({'error': 'User ID is required'}, status=status.HTTP_400_BAD_REQUEST)
+        
     try:
         user = Register.objects.get(id=user_id)
         return Response({
@@ -246,10 +251,12 @@ logger = logging.getLogger(__name__)
 
 @api_view(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'])
 def pharmacy_data(request):
-    # Get branch_code from request parameters or cookies
-    branch_code = request.query_params.get('branch_code') or request.COOKIES.get('branch_code')
-    
-    # MongoDB connection
+    branch_code = request.query_params.get('branch_code')
+
+    if request.method in ['GET', 'POST', 'PUT', 'PATCH'] and not branch_code:
+        logger.warning("Missing branch_code in request: 400 BAD REQUEST")
+        return Response({'error': 'branch_code is required'}, status=status.HTTP_400_BAD_REQUEST)
+
     client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
     db = client['cosmetology']
     pharmacy_collection = db.cosmetology_pharmacy
@@ -259,170 +266,124 @@ def pharmacy_data(request):
             query_filter = {}
             if branch_code:
                 query_filter['branch_code'] = branch_code
-
             medicines = list(pharmacy_collection.find(query_filter))
             for medicine in medicines:
                 medicine['_id'] = str(medicine['_id'])
-
+            logger.info("GET request successful: 200 OK")
             return Response(medicines, status=status.HTTP_200_OK)
         except Exception as e:
-            logger.error(f"Error fetching pharmacy data: {str(e)}")
+            logger.error(f"GET request failed: 500 ERROR - {str(e)}")
             return Response({"detail": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     if request.method == 'POST':
         try:
             items_to_process = request.data if isinstance(request.data, list) else [request.data]
-            inserted_ids = []
-            updated_count = 0
-
+            inserted_ids, updated_count = [], 0
             for item in items_to_process:
+                item = dict(item)
+                item.pop('_id', None)
                 if not item.get('branch_code') and branch_code:
                     item['branch_code'] = branch_code
                 item['created_at'] = datetime.now()
                 item['updated_at'] = datetime.now()
-
                 existing_record = pharmacy_collection.find_one({
                     "medicine_name": item.get("medicine_name"),
                     "batch_number": item.get("batch_number"),
                     "branch_code": item.get("branch_code")
                 })
-
                 if existing_record:
-                    pharmacy_collection.update_one(
-                        {"_id": existing_record["_id"]},
-                        {"$set": item}
-                    )
+                    pharmacy_collection.update_one({"_id": existing_record["_id"]}, {"$set": item})
                     updated_count += 1
                 else:
                     result = pharmacy_collection.insert_one(item)
                     inserted_ids.append(str(result.inserted_id))
-
+            logger.info("POST request successful: 201 CREATED")
             return Response({
                 "message": f"Processed {len(items_to_process)} records — {len(inserted_ids)} inserted, {updated_count} updated.",
                 "inserted_ids": inserted_ids
             }, status=status.HTTP_201_CREATED)
-
         except Exception as e:
-            logger.error(f"Error creating pharmacy data: {str(e)}")
+            logger.error(f"POST request failed: 500 ERROR - {str(e)}")
             return Response({"detail": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     if request.method == 'PATCH':
         try:
-            response_data = []
-
             request_data = request.data if isinstance(request.data, list) else [request.data]
-
+            response_data = []
             for data in request_data:
-                medicine_name = data.get('medicine_name')
-                batch_number = data.get('batch_number')
-
+                data = dict(data)
+                _id = data.pop('_id', None)
+                if not _id:
+                    logger.warning("PATCH request missing _id: 400 BAD REQUEST")
+                    return Response({"error": "_id is required for PATCH."}, status=status.HTTP_400_BAD_REQUEST)
+                data['updated_at'] = datetime.now()
                 if not data.get('branch_code') and branch_code:
                     data['branch_code'] = branch_code
-
-                data['updated_at'] = datetime.now()
-
                 if 'new_stock' in data and data['new_stock']:
-                    existing_record = pharmacy_collection.find_one({
-                        "medicine_name": medicine_name,
-                        "batch_number": batch_number,
-                        "branch_code": data.get('branch_code')
-                    })
+                    existing_record = pharmacy_collection.find_one({"_id": ObjectId(_id)})
                     if existing_record:
                         current_old_stock = existing_record.get('old_stock', 0)
                         new_stock_value = int(data.get('new_stock', 0))
                         data['old_stock'] = current_old_stock + new_stock_value
                         data['new_stock'] = 0
-
-                result = pharmacy_collection.update_one(
-                    {
-                        "medicine_name": medicine_name,
-                        "batch_number": batch_number,
-                        "branch_code": data.get('branch_code')
-                    },
-                    {"$set": data},
-                    upsert=True
-                )
-
-                if result.matched_count > 0 or result.upserted_id:
-                    updated_doc = pharmacy_collection.find_one({
-                        "medicine_name": medicine_name,
-                        "batch_number": batch_number,
-                        "branch_code": data.get('branch_code')
-                    })
-                    if updated_doc:
-                        updated_doc['_id'] = str(updated_doc['_id'])
-                        response_data.append(updated_doc)
+                result = pharmacy_collection.update_one({"_id": ObjectId(_id)}, {"$set": data})
+                if result.matched_count:
+                    updated_doc = pharmacy_collection.find_one({"_id": ObjectId(_id)})
+                    updated_doc['_id'] = str(updated_doc['_id'])
+                    response_data.append(updated_doc)
                 else:
-                    logger.error(f"Failed to update document with medicine_name={medicine_name}, batch_number={batch_number}")
-                    return Response({'error': 'Failed to update the document.'}, status=status.HTTP_400_BAD_REQUEST)
-
+                    logger.warning(f"PATCH _id not found: {_id} — 404 NOT FOUND")
+                    return Response({'error': f'Document with _id {_id} not found'}, status=status.HTTP_404_NOT_FOUND)
+            logger.info("PATCH request successful: 200 OK")
             return Response(response_data, status=status.HTTP_200_OK)
-
         except Exception as e:
-            logger.error(f"Error updating pharmacy data: {str(e)}")
-            return Response({"detail": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-    if request.method == 'DELETE':
-        try:
-            medicine_name = request.query_params.get('medicine_name')
-            batch_number = request.query_params.get('batch_number')
-
-            if not medicine_name or not batch_number:
-                return Response({'error': 'medicine_name and batch_number are required'}, status=status.HTTP_400_BAD_REQUEST)
-
-            result = pharmacy_collection.delete_one({
-                "medicine_name": medicine_name,
-                "batch_number": batch_number,
-                "branch_code": branch_code
-            })
-
-            if result.deleted_count > 0:
-                return Response({'message': 'Record deleted successfully'}, status=status.HTTP_200_OK)
-            else:
-                return Response({'error': 'Record not found'}, status=status.HTTP_404_NOT_FOUND)
-
-        except Exception as e:
-            logger.error(f"Error deleting pharmacy data: {str(e)}")
+            logger.error(f"PATCH request failed: 500 ERROR - {str(e)}")
             return Response({"detail": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     if request.method == 'PUT':
         try:
             request_data = request.data if isinstance(request.data, list) else [request.data]
             response_data = []
-
             for data in request_data:
+                data = dict(data)
+                _id = data.pop('_id', None)
+                if not _id:
+                    logger.warning("PUT request missing _id: 400 BAD REQUEST")
+                    return Response({"error": "_id is required for PUT."}, status=status.HTTP_400_BAD_REQUEST)
                 if not data.get('branch_code') and branch_code:
                     data['branch_code'] = branch_code
-
-
-
-                medicine_name = data.get('medicine_name')
-                batch_number = data.get('batch_number')
-
-                existing_record = pharmacy_collection.find_one({
-                    "medicine_name": medicine_name,
-                    "batch_number": batch_number,
-                    "branch_code": data.get('branch_code')
-                })
-
-                if existing_record:
-                    pharmacy_collection.update_one(
-                        {"_id": existing_record["_id"]},
-                        {"$set": data}
-                    )
-                    updated_doc = pharmacy_collection.find_one({"_id": existing_record["_id"]})
+                data['updated_at'] = datetime.now()
+                result = pharmacy_collection.update_one({"_id": ObjectId(_id)}, {"$set": data}, upsert=False)
+                if result.matched_count:
+                    updated_doc = pharmacy_collection.find_one({"_id": ObjectId(_id)})
                     updated_doc['_id'] = str(updated_doc['_id'])
                     response_data.append(updated_doc)
                 else:
-                    result = pharmacy_collection.insert_one(data)
-                    data['_id'] = str(result.inserted_id)
-                    response_data.append(data)
-
+                    logger.warning(f"PUT _id not found: {_id} — 404 NOT FOUND")
+                    return Response({'error': f'Document with _id {_id} not found'}, status=status.HTTP_404_NOT_FOUND)
+            logger.info("PUT request successful: 200 OK")
             return Response(response_data, status=status.HTTP_200_OK)
-
         except Exception as e:
-            logger.error(f"Error replacing pharmacy data: {str(e)}")
+            logger.error(f"PUT request failed: 500 ERROR - {str(e)}")
             return Response({"detail": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    if request.method == 'DELETE':
+        try:
+            _id = request.query_params.get('_id')
+            if not _id:
+                logger.warning("DELETE request missing _id: 400 BAD REQUEST")
+                return Response({'error': '_id is required for DELETE'}, status=status.HTTP_400_BAD_REQUEST)
+            
+            result = pharmacy_collection.delete_one({"_id": ObjectId(_id)})
+            if result.deleted_count:
+                return Response({'message': 'Record deleted successfully'}, status=status.HTTP_200_OK)
+            else:
+                logger.warning(f"DELETE request: No record found with _id {_id}: 404 NOT FOUND")
+                return Response({'error': 'Record not found'}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            logger.error(f"Error deleting pharmacy data: {str(e)}")
+            return Response({"detail": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 
 
 
@@ -434,13 +395,17 @@ pharmacy_collection = db.cosmetology_pharmacy
 @require_http_methods(["DELETE"])
 @csrf_exempt
 def delete_medicine(request, medicine_name):
-    branch_code = request.GET.get('branch_code') or request.COOKIES.get('branch_code')
+    branch_code = request.GET.get('branch_code')
+    
+    if not branch_code:
+        return JsonResponse({"error": "branch_code is required"}, status=400)
+    if not medicine_name:
+        return JsonResponse({"error": "medicine_name is required"}, status=400)
 
     query = {
-        "medicine_name": medicine_name
+        "medicine_name": medicine_name,
+        "branch_code": branch_code
     }
-    if branch_code:
-        query["branch_code"] = branch_code
 
     try:
         result = pharmacy_collection.delete_one(query)
@@ -460,10 +425,15 @@ def update_stock(request):
         data = request.data
         medicine_name = data.get('medicine_name')
         qty = data.get('qty')
-        branch_code = data.get('branch_code') or request.COOKIES.get('branch_code')
+        branch_code = data.get('branch_code')
         
-        if not medicine_name or qty is None:
-            return Response({'error': 'Invalid data. Medicine name and quantity are required.'}, status=status.HTTP_400_BAD_REQUEST)
+        if not medicine_name:
+            return Response({'error': 'medicine_name is required'}, status=status.HTTP_400_BAD_REQUEST)
+        if qty is None:
+            return Response({'error': 'qty is required'}, status=status.HTTP_400_BAD_REQUEST)
+        if not branch_code:
+            return Response({'error': 'branch_code is required'}, status=status.HTTP_400_BAD_REQUEST)
+            
         try:
             qty = int(qty)  # Ensure qty is an integer
             # Correct MongoDB connection string
@@ -471,10 +441,11 @@ def update_stock(request):
             db = client['cosmetology']
             pharmacy_collection = db.cosmetology_pharmacy
             
-            # Find the document by medicine_name and branch_code if provided
-            query = {'medicine_name': medicine_name}
-            if branch_code:
-                query['branch_code'] = branch_code
+            # Find the document by medicine_name and branch_code
+            query = {
+                'medicine_name': medicine_name,
+                'branch_code': branch_code
+            }
                 
             document = pharmacy_collection.find_one(query)
             if not document:
@@ -499,7 +470,10 @@ def update_stock(request):
 
 @api_view(['POST'])
 def pharmacy_upload(request):
-    branch_code = request.data.get('branch_code') or request.COOKIES.get('branch_code')
+    branch_code = request.data.get('branch_code')
+    
+    if not branch_code:
+        return Response({'error': 'branch_code is required'}, status=status.HTTP_400_BAD_REQUEST)
     
     if request.method == 'POST' and request.FILES.get('file'):
         file = request.FILES['file']
@@ -511,16 +485,16 @@ def pharmacy_upload(request):
 
 @api_view(['GET'])
 def check_medicine_status(request):
-    branch_code = request.query_params.get('branch_code') or request.COOKIES.get('branch_code')
+    branch_code = request.query_params.get('branch_code')
+    
+    if not branch_code:
+        return Response({'error': 'branch_code is required'}, status=status.HTTP_400_BAD_REQUEST)
     
     low_quantity_medicines = []
     near_expiry_medicines = []
 
-    # Filter by branch_code if provided
-    if branch_code:
-        medicines = Pharmacy.objects.filter(branch_code=branch_code)
-    else:
-        medicines = Pharmacy.objects.all()
+    # Filter by branch_code
+    medicines = Pharmacy.objects.filter(branch_code=branch_code)
 
     for medicine in medicines:
         if medicine.is_quantity_low():
@@ -538,12 +512,14 @@ def check_medicine_status(request):
 
 @api_view(['POST', 'PATCH', 'DELETE'])
 def Patients_data(request, patientUID=None):
-    branch_code = request.data.get('branch_code') or request.COOKIES.get('branch_code')
+    branch_code = request.data.get('branch_code')
+    
+    if not branch_code:
+        return Response({'error': 'branch_code is required'}, status=status.HTTP_400_BAD_REQUEST)
     
     if request.method == 'POST':
-        # Add branch_code to request data if not present
-        if not request.data.get('branch_code') and branch_code:
-            request.data['branch_code'] = branch_code
+        # Add branch_code to request data
+        request.data['branch_code'] = branch_code
             
         serializer = PatientSerializer(data=request.data)
         if serializer.is_valid():
@@ -554,17 +530,13 @@ def Patients_data(request, patientUID=None):
         if not patientUID:
             return Response({"error": "patientUID is required in the URL"}, status=status.HTTP_400_BAD_REQUEST)
         try:
-            # Find patient by UID and branch_code if provided
-            if branch_code:
-                patient = Patient.objects.get(patientUID=patientUID, branch_code=branch_code)
-            else:
-                patient = Patient.objects.get(patientUID=patientUID)
+            # Find patient by UID and branch_code
+            patient = Patient.objects.get(patientUID=patientUID, branch_code=branch_code)
         except Patient.DoesNotExist:
             return Response({"error": "Patient not found"}, status=status.HTTP_404_NOT_FOUND)
         
-        # Add branch_code to request data if not present
-        if not request.data.get('branch_code') and branch_code:
-            request.data['branch_code'] = branch_code
+        # Add branch_code to request data
+        request.data['branch_code'] = branch_code
             
         serializer = PatientSerializer(patient, data=request.data, partial=True)
         if serializer.is_valid():
@@ -575,11 +547,8 @@ def Patients_data(request, patientUID=None):
         if not patientUID:
             return Response({"error": "patientUID is required in the URL"}, status=status.HTTP_400_BAD_REQUEST)
         try:
-            # Delete patient by UID and branch_code if provided
-            if branch_code:
-                patient = Patient.objects.get(patientUID=patientUID, branch_code=branch_code)
-            else:
-                patient = Patient.objects.get(patientUID=patientUID)
+            # Delete patient by UID and branch_code
+            patient = Patient.objects.get(patientUID=patientUID, branch_code=branch_code)
             patient.delete()
             return Response({"message": "Patient deleted successfully"}, status=status.HTTP_200_OK)
         except Patient.DoesNotExist:
@@ -589,13 +558,13 @@ def Patients_data(request, patientUID=None):
 @api_view(['GET'])
 def PatientView(request):
     if request.method == 'GET':
-        branch_code = request.query_params.get('branch_code') or request.COOKIES.get('branch_code')
+        branch_code = request.query_params.get('branch_code')
         
-        # Filter by branch_code if provided
-        if branch_code:
-            patients = Patient.objects.filter(branch_code=branch_code)
-        else:
-            patients = Patient.objects.all()
+        if not branch_code:
+            return Response({'error': 'branch_code is required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Filter by branch_code
+        patients = Patient.objects.filter(branch_code=branch_code)
             
         serializer = PatientSerializer(patients, many=True)
         return Response(serializer.data)
@@ -609,13 +578,13 @@ def Appointmentpost(request):
         appointment_date = request.data.get('appointmentDate')
         branch_code = request.data.get('branch_code')
         
-        # Get branch_code from cookie if not in request data
+        # Validate required fields
+        if not patient_uid:
+            return Response({"error": "patientUID is required"}, status=status.HTTP_400_BAD_REQUEST)
+        if not appointment_date:
+            return Response({"error": "appointmentDate is required"}, status=status.HTTP_400_BAD_REQUEST)
         if not branch_code:
-            branch_code = request.COOKIES.get('branch_code')
-        
-        # Check if branch_code is valid (this is just an example validation)
-        if not branch_code:
-            return Response({"error": "Branch code is required"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"error": "branch_code is required"}, status=status.HTTP_400_BAD_REQUEST)
         
         try:
             patient = Patient.objects.get(patientUID=patient_uid)
@@ -643,12 +612,7 @@ def Appointmentpost(request):
         serializer = AppointmentSerializer(data=request.data)
         if serializer.is_valid():
             appointment = serializer.save()
-            
-            # Set the branch_code in the response cookie as well
-            response = Response(serializer.data, status=status.HTTP_201_CREATED)
-            response.set_cookie('branch_code', branch_code, max_age=7*24*60*60)  # 7 days
-            
-            return response
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     
 
@@ -662,18 +626,15 @@ def get_doctors(request):
         try:
             from pymongo import MongoClient
             import os
-            # Get branch_code from query params or cookies
-            branch_code = request.query_params.get('branch_code') or request.COOKIES.get('branch_code')
+        
             # Connect to MongoDB
             client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
             db = client['cosmetology']
             collection = db['cosmetology_register']
             # Build query filter
             query_filter = {
-                "role": {"$in": ["Doctor", "Admin"]}
+                "role": {"$in": ["Doctor", "Admin"]},
             }
-            if branch_code:
-                query_filter["branch_code"] = {"$in": [branch_code]}
             # Fetch from DB
             doctors = list(collection.find(query_filter, {
                 "_id": 0,
@@ -700,15 +661,14 @@ def get_doctors(request):
 def AppointmentView(request):
     if request.method == 'GET':
         # Get branch_code and doctor filter from request parameters
-        branch_code = request.query_params.get('branch_code') or request.COOKIES.get('branch_code')
+        branch_code = request.query_params.get('branch_code')
         doctor_name = request.query_params.get('doctor_name')
         
-        # Start with base queryset
-        data = Appointment.objects.all()
+        if not branch_code:
+            return Response({'error': 'branch_code is required'}, status=status.HTTP_400_BAD_REQUEST)
         
-        # Filter by branch code if provided
-        if branch_code:
-            data = data.filter(branch_code=branch_code)
+        # Start with base queryset
+        data = Appointment.objects.filter(branch_code=branch_code)
         
         # Filter by doctor name if provided
         if doctor_name:
@@ -723,13 +683,16 @@ def SummaryDetailCreate(request):
     client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
     db = client['cosmetology']
     collection = db['cosmetology_summarydetail']
-    # Get branch_code from request or cookies
-    branch_code = request.data.get('branch_code') or request.query_params.get('branch_code') or request.COOKIES.get('branch_code')
+    # Get branch_code from request
+    branch_code = request.data.get('branch_code') or request.query_params.get('branch_code')
+    
+    if not branch_code:
+        return Response({'error': 'branch_code is required'}, status=status.HTTP_400_BAD_REQUEST)
+        
     if request.method == 'POST':
         try:
-            # Add branch_code to request data if not present
-            if not request.data.get('branch_code') and branch_code:
-                request.data['branch_code'] = branch_code
+            # Add branch_code to request data
+            request.data['branch_code'] = branch_code
             serializer = SummaryDetailSerializer(data=request.data)
             if serializer.is_valid():
                 serializer.save()
@@ -740,37 +703,40 @@ def SummaryDetailCreate(request):
     elif request.method == 'GET':
         try:
             date_str = request.GET.get('appointmentDate')
+            
+            if not date_str:
+                return Response({'error': 'appointmentDate is required'}, status=status.HTTP_400_BAD_REQUEST)
+                
             date = datetime.strptime(date_str, '%Y-%m-%d').date()
-            # Query SummaryDetail objects based on date and branch_code if provided
-            if branch_code:
-                summaries = SummaryDetail.objects.filter(appointmentDate=date, branch_code=branch_code)
-            else:
-                summaries = SummaryDetail.objects.filter(appointmentDate=date)
+            # Query SummaryDetail objects based on date and branch_code
+            summaries = SummaryDetail.objects.filter(appointmentDate=date, branch_code=branch_code)
             # Serialize the queryset
             serializer = SummaryDetailSerializer(summaries, many=True)
             return Response(serializer.data, status=status.HTTP_200_OK)
+        except ValueError as e:
+            return Response({'error': f'Invalid date format: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
-            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     elif request.method == 'PATCH':
         try:
             date_str = request.data.get('appointmentDate')
             patientUID = request.data.get('patientUID')
             # Validate required fields
-            if not date_str or not patientUID:
-                return Response({'error': 'Both appointmentDate and patientUID are required'}, status=status.HTTP_400_BAD_REQUEST)
+            if not date_str:
+                return Response({'error': 'appointmentDate is required'}, status=status.HTTP_400_BAD_REQUEST)
+            if not patientUID:
+                return Response({'error': 'patientUID is required'}, status=status.HTTP_400_BAD_REQUEST)
+                
             date = datetime.strptime(date_str, '%Y-%m-%d').date()
-            # Query to find the existing document, including branch_code if provided
-            query = {"appointmentDate": str(date), "patientUID": patientUID}
-            if branch_code:
-                query["branch_code"] = branch_code
+            # Query to find the existing document, including branch_code
+            query = {"appointmentDate": str(date), "patientUID": patientUID, "branch_code": branch_code}
             existing_document = collection.find_one(query)
             if not existing_document:
                 return Response({'error': 'No matching summary data found'}, status=status.HTTP_404_NOT_FOUND)
             # Create updated data starting with existing document
             updated_data = existing_document.copy()
             # Ensure branch_code is preserved
-            if not updated_data.get('branch_code') and branch_code:
-                updated_data['branch_code'] = branch_code
+            updated_data['branch_code'] = branch_code
             # Handle prescription field - replace instead of append
             if "prescription" in request.data:
                 # Directly replace the prescription field with new data
@@ -825,25 +791,27 @@ def SummaryDetailCreate(request):
             if updated_document and '_id' in updated_document:
                 updated_document['_id'] = str(updated_document['_id'])  # Convert ObjectId to string
             return Response(updated_document, status=status.HTTP_200_OK)
+        except ValueError as e:
+            return Response({'error': f'Invalid date format: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
-            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @api_view(['GET'])
 def PatientDetailsView(request):
     try:
         date_str = request.GET.get('appointmentDate')
-        branch_code = request.query_params.get('branch_code') or request.COOKIES.get('branch_code')
+        branch_code = request.query_params.get('branch_code')
         
-        if date_str is None:
-            return Response({'error': 'Date parameter is missing'}, status=status.HTTP_400_BAD_REQUEST)
+        if not date_str:
+            return Response({'error': 'appointmentDate is required'}, status=status.HTTP_400_BAD_REQUEST)
+        if not branch_code:
+            return Response({'error': 'branch_code is required'}, status=status.HTTP_400_BAD_REQUEST)
+            
         date = datetime.strptime(date_str, '%Y-%m-%d').date()
         
-        # Query SummaryDetail objects based on date and branch_code if provided
-        if branch_code:
-            summaries = SummaryDetail.objects.filter(appointmentDate=date, branch_code=branch_code)
-        else:
-            summaries = SummaryDetail.objects.filter(appointmentDate=date)
+        # Query SummaryDetail objects based on date and branch_code
+        summaries = SummaryDetail.objects.filter(appointmentDate=date, branch_code=branch_code)
             
         # Serialize the queryset
         serializer = SummaryDetailSerializer(summaries, many=True)
@@ -851,7 +819,7 @@ def PatientDetailsView(request):
     except ValueError:
         return Response({'error': 'Invalid date format. Expected YYYY-MM-DD'}, status=status.HTTP_400_BAD_REQUEST)
     except Exception as e:
-        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @api_view(['GET'])
@@ -860,17 +828,18 @@ def get_medicine_price(request):
         # Fetch query parameters
         medicine_name = request.GET.get('medicine_name')
         batch_number = request.GET.get('batch_number')
-        branch_code = request.query_params.get('branch_code') or request.COOKIES.get('branch_code')
+        branch_code = request.query_params.get('branch_code')
+
+        if not branch_code:
+            return Response({'error': 'branch_code is required'}, status=status.HTTP_400_BAD_REQUEST)
 
         # Apply filters based on query parameters
-        medicines = Pharmacy.objects.all()
+        medicines = Pharmacy.objects.filter(branch_code=branch_code)
 
         if medicine_name:
             medicines = medicines.filter(medicine_name__icontains=medicine_name)
         if batch_number:
             medicines = medicines.filter(batch_number=batch_number)
-        if branch_code:
-            medicines = medicines.filter(branch_code=branch_code)
 
         # Exclude medicines with old_stock equal to 0
         medicines = medicines.filter(old_stock__gt=0)
@@ -903,21 +872,21 @@ def get_medicine_price(request):
         return Response(response_data, status=status.HTTP_200_OK)
 
     except Exception as e:
-        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @api_view(['GET'])
 @csrf_exempt
 def check_upcoming_visits(request):
-    branch_code = request.query_params.get('branch_code') or request.COOKIES.get('branch_code')
+    branch_code = request.query_params.get('branch_code')
+    
+    if not branch_code:
+        return JsonResponse({'error': 'branch_code is required'}, status=400)
     
     one_week_from_now = timezone.now().date() + timedelta(days=7)
     
-    # Filter by branch_code if provided
-    if branch_code:
-        upcoming_visits = SummaryDetail.objects.filter(branch_code=branch_code)
-    else:
-        upcoming_visits = SummaryDetail.objects.all()
+    # Filter by branch_code
+    upcoming_visits = SummaryDetail.objects.filter(branch_code=branch_code)
         
     filtered_visits = []
 
@@ -948,7 +917,7 @@ def check_upcoming_visits(request):
 def vitalform(request):
     if request.method == 'POST':
         data = json.loads(request.body)
-        branch_code = data.get('branch_code') or request.COOKIES.get('branch_code')
+        branch_code = data.get('branch_code')
         
         # Validate branch_code
         if not branch_code:
@@ -965,18 +934,18 @@ def vitalform(request):
             branch_code=branch_code
         )
         serializer = VitalSerializer(vital)
-        response = Response({'status': 'success', 'vital': serializer.data})
-        response.set_cookie('branch_code', branch_code, max_age=7*24*60*60)  # 7 days
-        return response
+        return Response({'status': 'success', 'vital': serializer.data})
     elif request.method == 'GET':
         patientUID = request.GET.get('patientUID')
-        branch_code = request.GET.get('branch_code') or request.COOKIES.get('branch_code')
+        branch_code = request.GET.get('branch_code')
         
-        # Filter by branch_code if provided
-        if branch_code:
-            vitals = Vital.objects.filter(patientUID=patientUID, branch_code=branch_code)
-        else:
-            vitals = Vital.objects.filter(patientUID=patientUID)
+        if not patientUID:
+            return Response({'status': 'error', 'message': 'patientUID is required'}, status=400)
+        if not branch_code:
+            return Response({'status': 'error', 'message': 'branch_code is required'}, status=400)
+        
+        # Filter by branch_code
+        vitals = Vital.objects.filter(patientUID=patientUID, branch_code=branch_code)
             
         serializer = VitalSerializer(vitals, many=True)
         return Response({'status': 'success', 'vital': serializer.data})
@@ -1090,14 +1059,21 @@ def save_billing_data(request):
             discount = data.get('discount')
             payment_type = data.get('paymentType')
             section = data.get('section')
-            branch_code = data.get('branch_code') or request.COOKIES.get('branch_code')
+            branch_code = data.get('branch_code')
             
-            # Validate branch_code
-            if not branch_code:
-                return JsonResponse({'error': 'Branch code is required.'}, status=400)
-
+            # Validate required fields
+            if not patientUID:
+                return JsonResponse({'error': 'patientUID is required'}, status=400)
+            if not patientName:
+                return JsonResponse({'error': 'patientName is required'}, status=400)
             if not date:
-                return JsonResponse({'error': 'Date is required.'}, status=400)
+                return JsonResponse({'error': 'appointmentDate is required'}, status=400)
+            if not branch_code:
+                return JsonResponse({'error': 'branch_code is required'}, status=400)
+            if not payment_type:
+                return JsonResponse({'error': 'paymentType is required'}, status=400)
+            if not section:
+                return JsonResponse({'error': 'section is required'}, status=400)
             
             # Validate table_data as a JSON object
             if isinstance(table_data, str):
@@ -1121,9 +1097,7 @@ def save_billing_data(request):
             )
             billing_data.save()
 
-            response = JsonResponse({'success': 'Billing data successfully saved!', 'serialNumber': bill_number}, status=201)
-            response.set_cookie('branch_code', branch_code, max_age=7*24*60*60)  # 7 days
-            return response
+            return JsonResponse({'success': 'Billing data successfully saved!', 'serialNumber': bill_number}, status=201)
             
         except Exception as e:
             return JsonResponse({'error': str(e)}, status=400)
@@ -1200,26 +1174,29 @@ def summary_get(request):
             # Get parameters from the request
             date_str = request.GET.get('appointmentDate')
             patientUID = request.GET.get('patientUID')
-            branch_code = request.GET.get('branch_code') or request.COOKIES.get('branch_code')
+            branch_code = request.GET.get('branch_code')
             
             # Validate parameters
-            if not date_str or not patientUID:
-                return Response({'error': 'Both appointmentDate and patientUID are required'}, status=status.HTTP_400_BAD_REQUEST)
+            if not date_str:
+                return Response({'error': 'appointmentDate is required'}, status=status.HTTP_400_BAD_REQUEST)
+            if not patientUID:
+                return Response({'error': 'patientUID is required'}, status=status.HTTP_400_BAD_REQUEST)
+            if not branch_code:
+                return Response({'error': 'branch_code is required'}, status=status.HTTP_400_BAD_REQUEST)
                 
             # Convert date string to date object
             date = datetime.strptime(date_str, '%Y-%m-%d').date()
             
             # Filter records based on parameters
-            if branch_code:
-                summaries = SummaryDetail.objects.filter(appointmentDate=date, patientUID=patientUID, branch_code=branch_code)
-            else:
-                summaries = SummaryDetail.objects.filter(appointmentDate=date, patientUID=patientUID)
+            summaries = SummaryDetail.objects.filter(appointmentDate=date, patientUID=patientUID, branch_code=branch_code)
                 
             # Serialize and return the data
             serializer = SummaryDetailSerializer(summaries, many=True)
             return Response(serializer.data, status=status.HTTP_200_OK)
+        except ValueError as e:
+            return Response({'error': f'Invalid date format: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
-            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @api_view(['PUT'])
@@ -1229,19 +1206,27 @@ def update_billing_data(request):
         patientUID = request.data.get('patientUID')
         date = request.data.get('appointmentDate')
         table_data = request.data.get('table_data')
-        branch_code = request.data.get('branch_code') or request.COOKIES.get('branch_code')
+        branch_code = request.data.get('branch_code')
 
-        if not patientUID or not date or not table_data:
-            return Response({'error': 'Invalid data'}, status=status.HTTP_400_BAD_REQUEST)
+        if not patientUID:
+            return Response({'error': 'patientUID is required'}, status=status.HTTP_400_BAD_REQUEST)
+        if not date:
+            return Response({'error': 'appointmentDate is required'}, status=status.HTTP_400_BAD_REQUEST)
+        if not table_data:
+            return Response({'error': 'table_data is required'}, status=status.HTTP_400_BAD_REQUEST)
+        if not branch_code:
+            return Response({'error': 'branch_code is required'}, status=status.HTTP_400_BAD_REQUEST)
 
         # Validate table_data as a JSON object
         if isinstance(table_data, str):
             table_data = json.loads(table_data)
 
-        # Find and update the record with branch_code if provided
-        query = {'patientUID': patientUID, 'appointmentDate': date}
-        if branch_code:
-            query['branch_code'] = branch_code
+        # Find and update the record with branch_code
+        query = {
+            'patientUID': patientUID, 
+            'appointmentDate': date,
+            'branch_code': branch_code
+        }
 
         result = collection.find_one_and_update(
             query,
@@ -1255,7 +1240,7 @@ def update_billing_data(request):
             return Response({'error': 'Data not found'}, status=status.HTTP_404_NOT_FOUND)
 
     except Exception as e:
-        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @require_http_methods(["DELETE"])
@@ -1268,16 +1253,22 @@ def delete_billing_data(request):
             data = json.loads(request.body.decode('utf-8'))
             patient_uid = data.get('patientUID')  # Patient UID
             bill_number = data.get('billNumber')  # Bill Number
-            branch_code = data.get('branch_code') or request.COOKIES.get('branch_code')
+            branch_code = data.get('branch_code')
 
             # Validate input data
-            if not patient_uid or not bill_number:
-                return JsonResponse({'message': 'Missing patientUID or billNumber'}, status=400)
+            if not patient_uid:
+                return JsonResponse({'message': 'patientUID is required'}, status=400)
+            if not bill_number:
+                return JsonResponse({'message': 'billNumber is required'}, status=400)
+            if not branch_code:
+                return JsonResponse({'message': 'branch_code is required'}, status=400)
 
             # Delete the specific record using patientUID and billNumber
-            query = {'patientUID': patient_uid, 'billNumber': bill_number}
-            if branch_code:
-                query['branch_code'] = branch_code
+            query = {
+                'patientUID': patient_uid, 
+                'billNumber': bill_number,
+                'branch_code': branch_code
+            }
 
             deleted_count, _ = BillingData.objects.filter(**query).delete()
 
@@ -1307,26 +1298,27 @@ def delete_procedure_data(request):
             patient_uid = data.get('patientUID')  # Patient UID
             consumer_bill_number = data.get('consumerBillNumber')  # Consumer Bill Number
             procedure_bill_number = data.get('procedureBillNumber')  # Procedure Bill Number
-            branch_code = data.get('branch_code') or request.COOKIES.get('branch_code')
+            branch_code = data.get('branch_code')
 
             # Validate input data
             if not patient_uid:
-                return JsonResponse({'message': 'Missing patientUID'}, status=400)
-            
+                return JsonResponse({'message': 'patientUID is required'}, status=400)
+            if not branch_code:
+                return JsonResponse({'message': 'branch_code is required'}, status=400)
             if not consumer_bill_number and not procedure_bill_number:
                 return JsonResponse({'message': 'Either consumerBillNumber or procedureBillNumber must be provided'}, status=400)
 
             # Build query for deletion
-            query = {'patientUID': patient_uid}
+            query = {
+                'patientUID': patient_uid,
+                'branch_code': branch_code
+            }
 
             if consumer_bill_number:
                 query['consumerBillNumber'] = consumer_bill_number
             
             if procedure_bill_number:
                 query['procedureBillNumber'] = procedure_bill_number
-                
-            if branch_code:
-                query['branch_code'] = branch_code
 
             # Log the query
             logger.info(f"Query for deletion: {query}")
@@ -1348,10 +1340,12 @@ def delete_procedure_data(request):
 @csrf_exempt
 def get_summary_by_interval(request, interval):
     date_str = request.GET.get('appointmentDate')
-    branch_code = request.GET.get('branch_code') or request.COOKIES.get('branch_code')
+    branch_code = request.GET.get('branch_code')
 
     if not date_str:
-        return JsonResponse({'error': 'Date parameter is missing'}, status=400)
+        return JsonResponse({'error': 'appointmentDate is required'}, status=400)
+    if not branch_code:
+        return JsonResponse({'error': 'branch_code is required'}, status=400)
 
     try:
         selected_date = datetime.strptime(date_str, '%Y-%m-%d').date()
@@ -1380,24 +1374,21 @@ def get_summary_by_interval(request, interval):
             branch_code__iexact=branch_code
         ).exclude(branch_code__isnull=True).exclude(branch_code='')
     else:
-        summaries = SummaryDetail.objects.filter(
-            appointmentDate__range=(start_date, end_date)
-        )
-
+        return JsonResponse({'error': 'Invalid branch_code'}, status=400)
 
     print("Filtered count:", summaries.count())
     serializer = SummaryDetailSerializer(summaries, many=True)
     return JsonResponse(serializer.data, safe=False)
 
-
-
 @api_view(['GET'])
 def get_billing_by_interval(request, interval):
     date_str = request.GET.get('appointmentDate')
-    branch_code = request.GET.get('branch_code') or request.COOKIES.get('branch_code')
+    branch_code = request.GET.get('branch_code')
     
     if not date_str:
-        return JsonResponse({'error': 'Date parameter is missing'}, status=400)
+        return JsonResponse({'error': 'appointmentDate is required'}, status=400)
+    if not branch_code:
+        return JsonResponse({'error': 'branch_code is required'}, status=400)
 
     try:
         selected_date = datetime.strptime(date_str, '%Y-%m-%d').date()
@@ -1418,18 +1409,12 @@ def get_billing_by_interval(request, interval):
     else:
         return JsonResponse({'error': 'Invalid interval'}, status=400)
 
-    # Filter records with branch_code if available
-    if branch_code:
-        billing = BillingData.objects.filter(
-            appointmentDate__gte=start_date, 
-            appointmentDate__lte=end_date,
-            branch_code=branch_code
-        )
-    else:
-        billing = BillingData.objects.filter(
-            appointmentDate__gte=start_date, 
-            appointmentDate__lte=end_date
-        )
+    # Filter records with branch_code
+    billing = BillingData.objects.filter(
+        appointmentDate__gte=start_date, 
+        appointmentDate__lte=end_date,
+        branch_code=branch_code
+    )
         
     serializer = BillingDataSerializer(billing, many=True)
     return JsonResponse({'billing_data': serializer.data}, safe=False)
@@ -1439,10 +1424,12 @@ def get_billing_by_interval(request, interval):
 @csrf_exempt
 def get_procedurebilling_by_interval(request, interval):
     date_str = request.GET.get('appointmentDate')
-    branch_code = request.GET.get('branch_code') or request.COOKIES.get('branch_code')
+    branch_code = request.GET.get('branch_code')
     
     if not date_str:
-        return JsonResponse({'error': 'Date parameter is missing'}, status=400)
+        return JsonResponse({'error': 'appointmentDate is required'}, status=400)
+    if not branch_code:
+        return JsonResponse({'error': 'branch_code is required'}, status=400)
 
     try:
         selected_date = datetime.strptime(date_str, '%Y-%m-%d').date()
@@ -1463,18 +1450,12 @@ def get_procedurebilling_by_interval(request, interval):
     else:
         return JsonResponse({'error': 'Invalid interval'}, status=400)
 
-    # Filter records with branch_code if available
-    if branch_code:
-        procedurebilling = ProcedureBill.objects.filter(
-            appointmentDate__gte=start_date, 
-            appointmentDate__lte=end_date,
-            branch_code=branch_code
-        )
-    else:
-        procedurebilling = ProcedureBill.objects.filter(
-            appointmentDate__gte=start_date, 
-            appointmentDate__lte=end_date
-        )
+    # Filter records with branch_code
+    procedurebilling = ProcedureBill.objects.filter(
+        appointmentDate__gte=start_date, 
+        appointmentDate__lte=end_date,
+        branch_code=branch_code
+    )
         
     serializer = ProcedureBillSerializer(procedurebilling, many=True)
     return JsonResponse(serializer.data, safe=False)
@@ -1483,21 +1464,21 @@ def get_procedurebilling_by_interval(request, interval):
 @require_GET
 def get_procedures_bill(request):
     date_str = request.GET.get('appointmentDate')
-    branch_code = request.GET.get('branch_code') or request.COOKIES.get('branch_code')
+    branch_code = request.GET.get('branch_code')
     
     if not date_str:
-        return JsonResponse({'error': 'Date parameter is missing'}, status=400)
+        return JsonResponse({'error': 'appointmentDate is required'}, status=400)
+    if not branch_code:
+        return JsonResponse({'error': 'branch_code is required'}, status=400)
+        
     try:
         date = datetime.strptime(date_str, '%Y-%m-%d').date()
         
-        # Fetch all records for the given date with branch_code if available
-        if branch_code:
-            summary_details = SummaryDetail.objects.filter(
-                appointmentDate=date,
-                branch_code=branch_code
-            )
-        else:
-            summary_details = SummaryDetail.objects.filter(appointmentDate=date)
+        # Fetch all records for the given date with branch_code
+        summary_details = SummaryDetail.objects.filter(
+            appointmentDate=date,
+            branch_code=branch_code
+        )
             
         # Initialize a dictionary to hold detailed records by patient UID
         detailed_records = {}
@@ -1549,10 +1530,20 @@ def post_procedures_bill(request):
         procedureNetAmount = data.get('procedureNetAmount')
         consumerNetAmount = data.get('consumerNetAmount')
         consumer = data.get('consumer')  # Ensure this is a valid JSON object
-        branch_code = data.get('branch_code') or request.COOKIES.get('branch_code')
-
-        # Get payment types and sections for both bills
+        branch_code = data.get('branch_code')
         payment_type = data.get('PaymentType')
+
+        # Validate required fields
+        if not patientUID:
+            return JsonResponse({'error': 'patientUID is required'}, status=400)
+        if not patientName:
+            return JsonResponse({'error': 'patientName is required'}, status=400)
+        if not appointmentDate:
+            return JsonResponse({'error': 'appointmentDate is required'}, status=400)
+        if not branch_code:
+            return JsonResponse({'error': 'branch_code is required'}, status=400)
+        if not payment_type:
+            return JsonResponse({'error': 'PaymentType is required'}, status=400)
 
         # Generate serial numbers for both consumer and procedure
         consumer_bill_number = generate_serial_number(payment_type, 'Consumer')
@@ -1577,7 +1568,7 @@ def post_procedures_bill(request):
             consumerBillNumber=consumer_bill_number,
             PaymentType=payment_type,
             procedureBillNumber=procedure_bill_number,
-            branch_code=branch_code,  # Add branch_code
+            branch_code=branch_code,
         )
         billing_data.save()
 
@@ -1591,19 +1582,18 @@ def medical_history(request):
     if request.method == 'POST':
         data = json.loads(request.body)
         patientUID = data.get('id')
-        branch_code = data.get('branch_code') or request.COOKIES.get('branch_code')
+        branch_code = data.get('branch_code')
         
         if not patientUID:
-            return JsonResponse({'error': 'Patient UID not provided'}, status=400)
+            return JsonResponse({'error': 'patientUID is required'}, status=400)
+        if not branch_code:
+            return JsonResponse({'error': 'branch_code is required'}, status=400)
             
-        # Filter with branch_code if available
-        if branch_code:
-            patient_details = SummaryDetail.objects.filter(
-                patientUID=patientUID,
-                branch_code=branch_code
-            ).values()
-        else:
-            patient_details = SummaryDetail.objects.filter(patientUID=patientUID).values()
+        # Filter with branch_code
+        patient_details = SummaryDetail.objects.filter(
+            patientUID=patientUID,
+            branch_code=branch_code
+        ).values()
             
         return JsonResponse(list(patient_details), safe=False)
         
@@ -1617,18 +1607,20 @@ fs = GridFS(db)
 def upload_file(request):
     if request.method == 'POST':
         patient_name = request.POST.get('patient_name')
-        branch_code = request.POST.get('branch_code') or request.COOKIES.get('branch_code')
+        branch_code = request.POST.get('branch_code')
+        
+        if not patient_name:
+            return HttpResponseBadRequest('patient_name is required')
+        if not branch_code:
+            return HttpResponseBadRequest('branch_code is required')
         
         if 'images' in request.FILES:
             imgsrc_files = request.FILES.getlist('images')
             uploaded_files = []
             
             for index, imgsrc_file in enumerate(imgsrc_files):
-                # Add branch code to filename if available
-                if branch_code:
-                    imgsrc_filename = f'{branch_code}_{patient_name}_{index}.jpg'
-                else:
-                    imgsrc_filename = f'{patient_name}_{index}.jpg'
+                # Add branch code to filename
+                imgsrc_filename = f'{branch_code}_{patient_name}_{index}.jpg'
                 
                 # Store file in GridFS with additional metadata
                 imgsrc_id = fs.put(
@@ -1661,17 +1653,15 @@ def get_file(request):
     
     # Get the filename and branch_code from the request parameters
     filename = request.GET.get('filename')
-    branch_code = request.GET.get('branch_code') or request.COOKIES.get('branch_code')
+    branch_code = request.GET.get('branch_code')
     
-    # Find the file in MongoDB GridFS
-    # If branch_code is provided, try to find file with matching branch_code first
-    file = None
-    if branch_code:
-        file = fs.find_one({"filename": filename, "branch_code": branch_code})
+    if not filename:
+        return HttpResponseBadRequest('filename is required')
+    if not branch_code:
+        return HttpResponseBadRequest('branch_code is required')
     
-    # If not found with branch_code or branch_code not provided, try without branch filtering
-    if file is None:
-        file = fs.find_one({"filename": filename})
+    # Find the file in MongoDB GridFS with matching branch_code
+    file = fs.find_one({"filename": filename, "branch_code": branch_code})
     
     if file is not None:
         # Return the file contents as an HTTP response
@@ -1688,18 +1678,20 @@ def get_file(request):
 def upload_pdf(request):
     if request.method == 'POST':
         patient_name = request.POST.get('patient_name')
-        branch_code = request.POST.get('branch_code') or request.COOKIES.get('branch_code')
+        branch_code = request.POST.get('branch_code')
+        
+        if not patient_name:
+            return HttpResponseBadRequest('patient_name is required')
+        if not branch_code:
+            return HttpResponseBadRequest('branch_code is required')
         
         if 'pdf_files' in request.FILES:
             pdf_files = request.FILES.getlist('pdf_files')
             uploaded_files = []
             
             for index, pdf_file in enumerate(pdf_files):
-                # Add branch code to filename if available
-                if branch_code:
-                    pdf_filename = f'{branch_code}_{patient_name}_{index}.pdf'
-                else:
-                    pdf_filename = f'{patient_name}_{index}.pdf'
+                # Add branch code to filename
+                pdf_filename = f'{branch_code}_{patient_name}_{index}.pdf'
                 
                 # Store file in GridFS with additional metadata
                 pdf_id = fs.put(
@@ -1732,17 +1724,15 @@ def get_pdf_file(request):
 
     # Get the filename and branch_code from the request parameters
     filename = request.GET.get('filename')
-    branch_code = request.GET.get('branch_code') or request.COOKIES.get('branch_code')
+    branch_code = request.GET.get('branch_code')
     
-    # Find the file in MongoDB GridFS
-    # If branch_code is provided, try to find file with matching branch_code first
-    file = None
-    if branch_code:
-        file = fs.find_one({"filename": filename, "branch_code": branch_code})
+    if not filename:
+        return HttpResponseBadRequest('filename is required')
+    if not branch_code:
+        return HttpResponseBadRequest('branch_code is required')
     
-    # If not found with branch_code or branch_code not provided, try without branch filtering
-    if file is None:
-        file = fs.find_one({"filename": filename})
+    # Find the file in MongoDB GridFS with matching branch_code
+    file = fs.find_one({"filename": filename, "branch_code": branch_code})
 
     if file is not None:
         # Return the PDF file contents as an HTTP response
