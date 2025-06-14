@@ -1,29 +1,13 @@
-env
-env/*
+# Python cache files
+__pycache__/
+*.py[cod]
 
-venv/
-.venv/*
-=======
-.venv
-venv/*
+# VSCode or IDE folders (optional)
+.vscode/
+.idea/
 
-# Ignore macOS system files
+# OS files (optional)
 .DS_Store
-venv/
 
-# Ignore environment variables
+# Environment files (optional)
 .env
-
-*.pyc
-**/*.pyc
-
-
-__pycache__/
-*/__pycache__/*
-=======
-__pycache__/*
-*/__pycache__/*
-
-__pycache__/
-*.pyc
-

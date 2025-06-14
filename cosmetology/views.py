@@ -162,6 +162,10 @@ def login(request):
             return Response({'error': 'Invalid username or password'}, status=status.HTTP_401_UNAUTHORIZED)
 
 
+# MongoDB connection setup (ensure this is outside the function or managed properly)
+client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+db = client['cosmetology']
+branch_collection = db['cosmetology_branch']
 from .serializers import BranchStatusSerializer
 @api_view(['POST'])
 @csrf_exempt
@@ -210,6 +214,7 @@ def toggle_branch_status(request):
         
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+
 @api_view(['GET'])
 def get_user_branches(request, user_id):
     """Get all branches for a user with their active status"""
@@ -227,25 +232,100 @@ def get_user_branches(request, user_id):
         return Response({'error': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
 
 
-# MongoDB connection setup
-client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
-db = client['cosmetology']
-branch_collection = db['cosmetology_branch']  
+@api_view(['POST'])
+@csrf_exempt
+def toggle_branch_status(request):
+    """Toggle the active status of a branch for a user, or add it if not present."""
+    if request.method == 'POST':
+        serializer = BranchStatusSerializer(data=request.data)
+        if serializer.is_valid():
+            user_id = serializer.validated_data['user_id']
+            branch_code = serializer.validated_data['branch_code']
+            new_status = serializer.validated_data['isactive']
+
+            try:
+                user = Register.objects.get(id=user_id)
+
+                updated_branches = []
+                branch_found = False
+
+                for branch_entry in user.branch_code: # Iterate through each branch dictionary
+                    # Ensure branch_entry is a dictionary and has 'branch_code'
+                    if isinstance(branch_entry, dict) and branch_entry.get('branch_code') == branch_code:
+                        updated_branches.append({
+                            'branch_code': branch_code,
+                            'isactive': new_status
+                        })
+                        branch_found = True
+                    else:
+                        # Keep existing branches that are not the one being updated
+                        updated_branches.append(branch_entry)
+
+                if not branch_found:
+                    # If branch_code was not found, it means it's a new assignment
+                    updated_branches.append({
+                        'branch_code': branch_code,
+                        'isactive': new_status
+                    })
+
+                user.branch_code = updated_branches
+                user.save()
+
+                return Response({
+                    'message': 'Branch status updated successfully',
+                    'branch_code': branch_code,
+                    'isactive': new_status
+                }, status=status.HTTP_200_OK)
+
+            except Register.DoesNotExist:
+                return Response({'error': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
+            except Exception as e:
+                # Log the full error for debugging in production
+                print(f"Error in toggle_branch_status: {e}")
+                return Response({'error': 'An internal server error occurred.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['GET'])
+def get_user_branches(request, user_id):
+    """Get all branches for a user with their active status"""
+    if not user_id:
+        return Response({'error': 'User ID is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        user = Register.objects.get(id=user_id)
+        # Ensure 'name' is retrieved correctly from your Register model
+        return Response({
+            'user_id': user.id,
+            'name': user.name, # Assuming your Register model has a 'name' field
+            'branches': user.branch_code # This should be a list of dicts: [{'branch_code': 'B1', 'isactive': True}]
+        }, status=status.HTTP_200_OK)
+    except Register.DoesNotExist:
+        return Response({'error': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        print(f"Error in get_user_branches: {e}")
+        return Response({'error': 'An internal server error occurred.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 
 @api_view(['GET'])
 def get_branches(request):
     try:
         # Directly fetch branches from MongoDB collection
-        branches = list(branch_collection.find({}, {'_id': 0}))  # Exclude MongoDB _id
+        # Ensure your MongoDB documents have 'branch_code' and 'branch_name' fields
+        branches = list(branch_collection.find({}, {'_id': 0, 'branch_code': 1, 'branch_name': 1}))
         
-        # If you need to include _id, you need to serialize it properly
         # Convert MongoDB cursor to JSON compatible format
+        # If branch_name is not present in some documents, handle it in frontend or here
         branches_json = json.loads(dumps(branches))
         
         return Response(branches_json, status=status.HTTP_200_OK)
     except Exception as e:
-        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-    
+        print(f"Error in get_branches: {e}")
+        return Response({'error': 'An internal server error occurred.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+
+from bson import ObjectId
 
 logger = logging.getLogger(__name__)
 
@@ -269,6 +349,9 @@ def pharmacy_data(request):
             medicines = list(pharmacy_collection.find(query_filter))
             for medicine in medicines:
                 medicine['_id'] = str(medicine['_id'])
+                # Ensure stock field exists, default to 0 if not present
+                if 'stock' not in medicine:
+                    medicine['stock'] = 0
             logger.info("GET request successful: 200 OK")
             return Response(medicines, status=status.HTTP_200_OK)
         except Exception as e:
@@ -286,12 +369,29 @@ def pharmacy_data(request):
                     item['branch_code'] = branch_code
                 item['created_at'] = datetime.now()
                 item['updated_at'] = datetime.now()
+                
+                # Convert new_stock to stock for new entries
+                if 'new_stock' in item:
+                    item['stock'] = int(item.get('new_stock', 0))
+                    item.pop('new_stock', None)
+                
+                # Remove old_stock and total_stock if present (legacy fields)
+                item.pop('old_stock', None)
+                item.pop('total_stock', None)
+                
+                # Ensure stock field exists
+                if 'stock' not in item:
+                    item['stock'] = 0
+                
                 existing_record = pharmacy_collection.find_one({
                     "medicine_name": item.get("medicine_name"),
                     "batch_number": item.get("batch_number"),
                     "branch_code": item.get("branch_code")
                 })
                 if existing_record:
+                    # For existing records, add new stock to current stock
+                    current_stock = existing_record.get('stock', 0)
+                    item['stock'] = current_stock + item.get('stock', 0)
                     pharmacy_collection.update_one({"_id": existing_record["_id"]}, {"$set": item})
                     updated_count += 1
                 else:
@@ -319,17 +419,28 @@ def pharmacy_data(request):
                 data['updated_at'] = datetime.now()
                 if not data.get('branch_code') and branch_code:
                     data['branch_code'] = branch_code
+                
+                # Handle stock update logic
                 if 'new_stock' in data and data['new_stock']:
                     existing_record = pharmacy_collection.find_one({"_id": ObjectId(_id)})
                     if existing_record:
-                        current_old_stock = existing_record.get('old_stock', 0)
+                        current_stock = existing_record.get('stock', 0)
                         new_stock_value = int(data.get('new_stock', 0))
-                        data['old_stock'] = current_old_stock + new_stock_value
-                        data['new_stock'] = 0
+                        data['stock'] = current_stock + new_stock_value
+                        # Remove new_stock from data as it's not stored in DB
+                        data.pop('new_stock', None)
+                
+                # Remove legacy fields if present
+                data.pop('old_stock', None)
+                data.pop('total_stock', None)
+                
                 result = pharmacy_collection.update_one({"_id": ObjectId(_id)}, {"$set": data})
                 if result.matched_count:
                     updated_doc = pharmacy_collection.find_one({"_id": ObjectId(_id)})
                     updated_doc['_id'] = str(updated_doc['_id'])
+                    # Ensure stock field exists in response
+                    if 'stock' not in updated_doc:
+                        updated_doc['stock'] = 0
                     response_data.append(updated_doc)
                 else:
                     logger.warning(f"PATCH _id not found: {_id} — 404 NOT FOUND")
@@ -353,10 +464,27 @@ def pharmacy_data(request):
                 if not data.get('branch_code') and branch_code:
                     data['branch_code'] = branch_code
                 data['updated_at'] = datetime.now()
+                
+                # Handle stock field for PUT requests
+                if 'new_stock' in data:
+                    data['stock'] = int(data.get('new_stock', 0))
+                    data.pop('new_stock', None)
+                
+                # Remove legacy fields if present
+                data.pop('old_stock', None)
+                data.pop('total_stock', None)
+                
+                # Ensure stock field exists
+                if 'stock' not in data:
+                    data['stock'] = 0
+                
                 result = pharmacy_collection.update_one({"_id": ObjectId(_id)}, {"$set": data}, upsert=False)
                 if result.matched_count:
                     updated_doc = pharmacy_collection.find_one({"_id": ObjectId(_id)})
                     updated_doc['_id'] = str(updated_doc['_id'])
+                    # Ensure stock field exists in response
+                    if 'stock' not in updated_doc:
+                        updated_doc['stock'] = 0
                     response_data.append(updated_doc)
                 else:
                     logger.warning(f"PUT _id not found: {_id} — 404 NOT FOUND")
@@ -376,6 +504,7 @@ def pharmacy_data(request):
             
             result = pharmacy_collection.delete_one({"_id": ObjectId(_id)})
             if result.deleted_count:
+                logger.info(f"DELETE request successful: Record {_id} deleted")
                 return Response({'message': 'Record deleted successfully'}, status=status.HTTP_200_OK)
             else:
                 logger.warning(f"DELETE request: No record found with _id {_id}: 404 NOT FOUND")
@@ -383,7 +512,6 @@ def pharmacy_data(request):
         except Exception as e:
             logger.error(f"Error deleting pharmacy data: {str(e)}")
             return Response({"detail": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
 
 
 
@@ -424,48 +552,56 @@ def update_stock(request):
     if request.method == 'PUT':
         data = request.data
         medicine_name = data.get('medicine_name')
+        batch_number = data.get('batch_number')
         qty = data.get('qty')
         branch_code = data.get('branch_code')
         
         if not medicine_name:
             return Response({'error': 'medicine_name is required'}, status=status.HTTP_400_BAD_REQUEST)
+        if not batch_number:
+            return Response({'error': 'batch_number is required'}, status=status.HTTP_400_BAD_REQUEST)
         if qty is None:
             return Response({'error': 'qty is required'}, status=status.HTTP_400_BAD_REQUEST)
         if not branch_code:
             return Response({'error': 'branch_code is required'}, status=status.HTTP_400_BAD_REQUEST)
-            
+
         try:
-            qty = int(qty)  # Ensure qty is an integer
-            # Correct MongoDB connection string
+            qty = int(qty)
             client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
             db = client['cosmetology']
             pharmacy_collection = db.cosmetology_pharmacy
-            
-            # Find the document by medicine_name and branch_code
+
             query = {
                 'medicine_name': medicine_name,
+                'batch_number': batch_number,
                 'branch_code': branch_code
             }
-                
+
             document = pharmacy_collection.find_one(query)
             if not document:
                 return Response({'error': 'Medicine not found'}, status=status.HTTP_404_NOT_FOUND)
-            old_stock = document.get('old_stock', 0)
-            new_stock = old_stock - qty
+
+            current_stock = document.get('stock', 0)
+            new_stock = current_stock - qty
+
             if new_stock < 0:
                 return Response({'error': 'Insufficient stock'}, status=status.HTTP_400_BAD_REQUEST)
-            # Update the stock
+
             result = pharmacy_collection.update_one(
                 query,
-                {'$set': {'old_stock': new_stock}}
+                {'$set': {'stock': new_stock}}
             )
+
             if result.matched_count == 0:
                 return Response({'error': 'Failed to update stock'}, status=status.HTTP_400_BAD_REQUEST)
+
             return Response({'message': 'Stock updated successfully'}, status=status.HTTP_200_OK)
+
         except ValueError:
             return Response({'error': 'Invalid quantity value'}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 
 
 @api_view(['POST'])
@@ -828,47 +964,41 @@ def get_medicine_price(request):
         # Fetch query parameters
         medicine_name = request.GET.get('medicine_name')
         batch_number = request.GET.get('batch_number')
-        branch_code = request.query_params.get('branch_code')
+        branch_code = request.GET.get('branch_code')
 
+        # Ensure branch_code is provided
         if not branch_code:
             return Response({'error': 'branch_code is required'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Apply filters based on query parameters
+        # Filter the queryset
         medicines = Pharmacy.objects.filter(branch_code=branch_code)
 
         if medicine_name:
-            medicines = medicines.filter(medicine_name__icontains=medicine_name)
+            medicines = medicines.filter(medicine_name__iexact=medicine_name)
         if batch_number:
             medicines = medicines.filter(batch_number=batch_number)
 
-        # Exclude medicines with old_stock equal to 0
-        medicines = medicines.filter(old_stock__gt=0)
-
-        # Check if any medicines exist after filtering
         if not medicines.exists():
-            return Response({'message': 'No medicines found matching the criteria or stock is empty'}, status=status.HTTP_404_NOT_FOUND)
+            return Response({'message': 'No medicines found matching the criteria'}, status=status.HTTP_404_NOT_FOUND)
 
-        # Get the medicine with the lowest old stock greater than 0
-        lowest_stock_medicine = medicines.order_by('old_stock').first()
+        # Build response list
+        response_data = []
+        for med in medicines:
+            response_data.append({
+                'medicine_name': med.medicine_name,
+                'company_name': med.company_name,
+                'price': str(Decimal(med.price)),
+                'CGST_percentage': med.CGST_percentage,
+                'CGST_value': med.CGST_value,
+                'SGST_percentage': med.SGST_percentage,
+                'SGST_value': med.SGST_value,
+                'stock': getattr(med, 'stock', 0),
+                'received_date': med.received_date,
+                'expiry_date': med.expiry_date,
+                'batch_number': med.batch_number,
+                'branch_code': med.branch_code,
+            })
 
-        # Serialize the response data
-        response_data = {
-            'medicine_name': lowest_stock_medicine.medicine_name,
-            'company_name': lowest_stock_medicine.company_name,
-            'price': str(Decimal(lowest_stock_medicine.price)),
-            'CGST_percentage': lowest_stock_medicine.CGST_percentage,
-            'CGST_value': lowest_stock_medicine.CGST_value,
-            'SGST_percentage': lowest_stock_medicine.SGST_percentage,
-            'SGST_value': lowest_stock_medicine.SGST_value,
-            'new_stock': lowest_stock_medicine.new_stock,
-            'old_stock': lowest_stock_medicine.old_stock,
-            'received_date': lowest_stock_medicine.received_date,
-            'expiry_date': lowest_stock_medicine.expiry_date,
-            'batch_number': lowest_stock_medicine.batch_number,
-            'branch_code': lowest_stock_medicine.branch_code,
-        }
-
-        # Return response
         return Response(response_data, status=status.HTTP_200_OK)
 
     except Exception as e:
@@ -1338,10 +1468,10 @@ def delete_procedure_data(request):
 
 @api_view(['GET'])
 @csrf_exempt
-def get_summary_by_interval(request, interval):
+def get_summary_by_interval(request, interval):    
     date_str = request.GET.get('appointmentDate')
     branch_code = request.GET.get('branch_code')
-
+    
     if not date_str:
         return JsonResponse({'error': 'appointmentDate is required'}, status=400)
     if not branch_code:
@@ -1354,31 +1484,25 @@ def get_summary_by_interval(request, interval):
 
     if interval == 'day':
         start_date = selected_date
-        end_date = selected_date
+        end_date = selected_date  # Start and end on the same day
     elif interval == 'month':
-        start_date = selected_date.replace(day=1)
-        next_month = (start_date + timedelta(days=31)).replace(day=1)
-        end_date = next_month - timedelta(days=1)
+        start_date = selected_date.replace(day=1)  # First day of the month
+        # Calculate the last day of the month
+        next_month = start_date.replace(day=28) + timedelta(days=4)
+        end_date = next_month.replace(day=1) - timedelta(days=1)
     else:
         return JsonResponse({'error': 'Invalid interval'}, status=400)
 
-    # Debugging
-    print("Branch Code:", branch_code)
-    print("Date range:", start_date, end_date)
+    # Filter records with branch_code
+    summary = SummaryDetail.objects.filter(
+        appointmentDate__gte=start_date, 
+        appointmentDate__lte=end_date,
+        branch_code=branch_code
+    )
+        
+    serializer = SummaryDetailSerializer(summary, many=True)
+    return JsonResponse({'summary_data': serializer.data}, safe=False)
 
-    # Clean and filter
-    if branch_code and branch_code.lower() != "null":
-        branch_code = branch_code.strip()
-        summaries = SummaryDetail.objects.filter(
-            appointmentDate__range=(start_date, end_date),
-            branch_code__iexact=branch_code
-        ).exclude(branch_code__isnull=True).exclude(branch_code='')
-    else:
-        return JsonResponse({'error': 'Invalid branch_code'}, status=400)
-
-    print("Filtered count:", summaries.count())
-    serializer = SummaryDetailSerializer(summaries, many=True)
-    return JsonResponse(serializer.data, safe=False)
 
 @api_view(['GET'])
 def get_billing_by_interval(request, interval):
