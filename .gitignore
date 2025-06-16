@@ -11,3 +11,5 @@ __pycache__/
 
 # Environment files (optional)
 .env
+
+venv/

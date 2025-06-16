@@ -367,8 +367,6 @@ def pharmacy_data(request):
                 item.pop('_id', None)
                 if not item.get('branch_code') and branch_code:
                     item['branch_code'] = branch_code
-                item['created_at'] = datetime.now()
-                item['updated_at'] = datetime.now()
                 
                 # Convert new_stock to stock for new entries
                 if 'new_stock' in item:
@@ -987,11 +985,11 @@ def get_medicine_price(request):
             response_data.append({
                 'medicine_name': med.medicine_name,
                 'company_name': med.company_name,
-                'price': str(Decimal(med.price)),
+                'price': str(Decimal(med.price) if med.price is not None else Decimal('0.00')),
                 'CGST_percentage': med.CGST_percentage,
-                'CGST_value': med.CGST_value,
+                'CGST_value': float(med.CGST_value) if med.CGST_value is not None else 0.0,
                 'SGST_percentage': med.SGST_percentage,
-                'SGST_value': med.SGST_value,
+                'SGST_value': float(med.SGST_value) if med.SGST_value is not None else 0.0,
                 'stock': getattr(med, 'stock', 0),
                 'received_date': med.received_date,
                 'expiry_date': med.expiry_date,
