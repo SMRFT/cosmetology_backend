@@ -188,6 +188,22 @@ class BillingData(AuditModel):
     billNumber = models.CharField(max_length=50)
 
 
+class ProcedureBill(AuditModel):
+    branch_code = models.CharField(max_length=50, blank=True, null=True)  # Add branch_code field
+    patient_handledby = models.CharField(max_length=100)
+    appointmentDate = models.CharField(max_length=255)
+    patientName = models.CharField(max_length=255)
+    patientUID = models.CharField(max_length=255)
+    procedures = models.JSONField()
+    procedureNetAmount = models.CharField(max_length=255)
+    consumerNetAmount = models.CharField(max_length=255)
+    consumer = models.JSONField()
+    # Add paymentType and billNumber for both consumer and procedure
+    PaymentType = models.CharField(max_length=10, choices=[('Cash', 'Cash'), ('Card', 'Card')])
+    consumerBillNumber = models.CharField(max_length=50)
+    procedureBillNumber = models.CharField(max_length=50)
+
+
 class Diagnosis(AuditModel):
     diagnosis= models.CharField(max_length=100)
 
@@ -204,17 +220,3 @@ class Procedure(AuditModel):
     procedure= models.CharField(max_length=500) 
 
 
-class ProcedureBill(AuditModel):
-    branch_code = models.CharField(max_length=50, blank=True, null=True)  # Add branch_code field
-    patient_handledby = models.CharField(max_length=100)
-    appointmentDate = models.CharField(max_length=255)
-    patientName = models.CharField(max_length=255)
-    patientUID = models.CharField(max_length=255)
-    procedures = models.JSONField()
-    procedureNetAmount = models.CharField(max_length=255)
-    consumerNetAmount = models.CharField(max_length=255)
-    consumer = models.JSONField()
-    # Add paymentType and billNumber for both consumer and procedure
-    PaymentType = models.CharField(max_length=10, choices=[('Cash', 'Cash'), ('Card', 'Card')])
-    consumerBillNumber = models.CharField(max_length=50)
-    procedureBillNumber = models.CharField(max_length=50)
