@@ -1185,7 +1185,6 @@ def getnewprocedurebill(request):
         return JsonResponse({'error': str(e)}, status=500)
 
 
-
 @api_view(['GET'])
 @csrf_exempt
 def check_upcoming_visits(request):
