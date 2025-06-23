@@ -89,7 +89,7 @@ class Pharmacy(AuditModel):
 class Patient(AuditModel):
     branch_code = models.CharField(max_length=50, blank=True, null=True)  # Add branch_code field
     patientName = models.CharField(max_length=255)  # Mandatory
-    mobileNumber = models.CharField(max_length=11)  # Mandatory
+    mobileNumber = models.CharField(max_length=10)  # Mandatory
     age = models.IntegerField()  # New field for age, replacing dateOfBirth
     gender = models.CharField(max_length=10, blank=True, null=True)  # Optional
     patientUID = models.CharField(max_length=10, primary_key=True, blank=True, editable=False)
