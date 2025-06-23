@@ -601,22 +601,6 @@ def update_stock(request):
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
-
-@api_view(['POST'])
-def pharmacy_upload(request):
-    branch_code = request.data.get('branch_code')
-    
-    if not branch_code:
-        return Response({'error': 'branch_code is required'}, status=status.HTTP_400_BAD_REQUEST)
-    
-    if request.method == 'POST' and request.FILES.get('file'):
-        file = request.FILES['file']
-        # Store branch_code with file info if needed
-        # Handle file upload logic here
-        return Response({'message': 'File uploaded successfully', 'branch_code': branch_code}, status=status.HTTP_201_CREATED)
-    return Response({'error': 'No file provided'}, status=status.HTTP_400_BAD_REQUEST)
-
-
 @api_view(['GET'])
 def check_medicine_status(request):
     branch_code = request.query_params.get('branch_code')
@@ -1001,6 +985,204 @@ def get_medicine_price(request):
 
     except Exception as e:
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+from django.db.models import Q
+@api_view(['GET'])
+def get_stored_bill(request):
+    """
+    Enhanced endpoint to get stored billing data with flexible parameter handling
+    Supports both specific patient queries and date-based queries
+    """
+    try:
+        # Get parameters
+        patientUID = request.GET.get('patientUID')
+        appointmentDate = request.GET.get('appointmentDate')
+        branch_code = request.GET.get('branch_code')
+        
+        # Validate required parameters based on query type
+        if not appointmentDate or not branch_code:
+            return Response({
+                "error": "appointmentDate and branch_code are required parameters"
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Build base query
+        base_query = Q(
+            appointmentDate=appointmentDate,
+            branch_code=branch_code
+        )
+        
+        # If patientUID is provided, add it to the query for specific patient data
+        if patientUID:
+            base_query &= Q(patientUID=patientUID)
+            
+            # For specific patient query, return single record or 204
+            billing = BillingData.objects.filter(base_query).last()
+            
+            if billing:
+                serializer = BillingDataSerializer(billing)
+                return Response(serializer.data, status=status.HTTP_200_OK)
+            else:
+                return Response({
+                    "message": "No billing data found for this patient"
+                }, status=status.HTTP_204_NO_CONTENT)
+        
+        else:
+            # For date-based query without patientUID, return all records for that date
+            billings = BillingData.objects.filter(base_query).exclude(patient_handledby="N/A").order_by('-appointmentDate')
+
+            
+            if billings.exists():
+                serializer = BillingDataSerializer(billings, many=True)
+                return Response(serializer.data, status=status.HTTP_200_OK)
+            else:
+                return Response({
+                    "message": "No billing data found for this date",
+                    "data": []
+                }, status=status.HTTP_200_OK)  # Return 200 with empty data instead of 204
+                
+    except Exception as e:
+        logger.error(f"Error in get_stored_bill: {str(e)}")
+        return Response({
+            "error": f"Internal server error: {str(e)}"
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+def get_stored_procedurebill(request):
+    """
+    Enhanced endpoint to get stored procedure billing data with flexible parameter handling
+    Supports both specific patient queries and date-based queries
+    """
+    try:
+        # Get parameters
+        patientUID = request.GET.get('patientUID')
+        appointmentDate = request.GET.get('appointmentDate')
+        branch_code = request.GET.get('branch_code')
+        
+        # Validate required parameters based on query type
+        if not appointmentDate or not branch_code:
+            return Response({
+                "error": "appointmentDate and branch_code are required parameters"
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Build base query
+        base_query = Q(
+            appointmentDate=appointmentDate,
+            branch_code=branch_code
+        )
+        
+        # If patientUID is provided, add it to the query for specific patient data
+        if patientUID:
+            base_query &= Q(patientUID=patientUID)
+            
+            # For specific patient query, return single record or 204
+            procedure_bill = ProcedureBill.objects.filter(base_query).last()
+            
+            if procedure_bill:
+                serializer = ProcedureBillSerializer(procedure_bill)
+                return Response(serializer.data, status=status.HTTP_200_OK)
+            else:
+                return Response({
+                    "message": "No procedure bill data found for this patient"
+                }, status=status.HTTP_204_NO_CONTENT)
+        
+        else:
+            # For date-based query without patientUID, return all records for that date
+            procedure_bills = ProcedureBill.objects.filter(base_query).exclude(patient_handledby="N/A").order_by('-appointmentDate')
+
+            
+            if procedure_bills.exists():
+                serializer = ProcedureBillSerializer(procedure_bills, many=True)
+                return Response(serializer.data, status=status.HTTP_200_OK)
+            else:
+                return Response({
+                    "message": "No procedure bill data found for this date",
+                    "data": []
+                }, status=status.HTTP_200_OK)  # Return 200 with empty data instead of 204
+                
+    except Exception as e:
+        logger.error(f"Error in get_stored_procedurebill: {str(e)}")
+        return Response({
+            "error": f"Internal server error: {str(e)}"
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    
+
+@require_GET
+def getnewbill(request):
+    patient_uid = request.GET.get('patientUID')
+    appointment_date = request.GET.get('appointmentDate')
+    branch_code = request.GET.get('branch_code')
+
+    if not patient_uid or not appointment_date or not branch_code:
+        return JsonResponse({'error': 'patientUID, appointmentDate, and branch_code are required'}, status=400)
+
+    try:
+        bills = BillingData.objects.filter(
+            patientUID=patient_uid,
+            appointmentDate=appointment_date,
+            branch_code=branch_code,
+            patient_handledby="N/A"
+        )
+
+        bill_data = []
+        for bill in bills:
+            bill_data.append({
+                'patientUID': bill.patientUID,
+                'patientName': bill.patientName,
+                'appointmentDate': bill.appointmentDate,
+                'branch_code': bill.branch_code,
+                'netAmount': bill.netAmount,
+                'discount': bill.discount,
+                'paymentType': bill.paymentType,
+                'billNumber': bill.billNumber,
+                'table_data': bill.table_data,
+                'patient_handledby': bill.patient_handledby,
+            })
+
+        return JsonResponse({'billingData': bill_data}, safe=False)
+
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)
+
+
+@require_GET
+def getnewprocedurebill(request):
+    patient_uid = request.GET.get('patientUID')
+    appointment_date = request.GET.get('appointmentDate')
+    branch_code = request.GET.get('branch_code')
+
+    if not patient_uid or not appointment_date or not branch_code:
+        return JsonResponse({'error': 'patientUID, appointmentDate, and branch_code are required'}, status=400)
+
+    try:
+        procedure_bills = ProcedureBill.objects.filter(
+            patientUID=patient_uid,
+            appointmentDate=appointment_date,
+            branch_code=branch_code,
+            patient_handledby="N/A"
+        )
+
+        procedure_data = []
+        for bill in procedure_bills:
+            procedure_data.append({
+                'patientUID': bill.patientUID,
+                'patientName': bill.patientName,
+                'appointmentDate': bill.appointmentDate,
+                'branch_code': bill.branch_code,
+                'procedures': bill.procedures,
+                'procedureNetAmount': bill.procedureNetAmount,
+                'consumerNetAmount': bill.consumerNetAmount,
+                'consumer': bill.consumer,
+                'paymentType': bill.PaymentType,
+                'consumerBillNumber': bill.consumerBillNumber,
+                'procedureBillNumber': bill.procedureBillNumber,
+                'patient_handledby': bill.patient_handledby,
+            })
+
+        return JsonResponse({'procedureBillingData': procedure_data}, safe=False)
+
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)
 
 
 @api_view(['GET'])
@@ -1719,149 +1901,3 @@ def medical_history(request):
             
         return JsonResponse(list(patient_details), safe=False)
         
-
-# Connect to MongoDB
-client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
-db = client['cosmetology']
-fs = GridFS(db)
-
-@csrf_exempt
-def upload_file(request):
-    if request.method == 'POST':
-        patient_name = request.POST.get('patient_name')
-        branch_code = request.POST.get('branch_code')
-        
-        if not patient_name:
-            return HttpResponseBadRequest('patient_name is required')
-        if not branch_code:
-            return HttpResponseBadRequest('branch_code is required')
-        
-        if 'images' in request.FILES:
-            imgsrc_files = request.FILES.getlist('images')
-            uploaded_files = []
-            
-            for index, imgsrc_file in enumerate(imgsrc_files):
-                # Add branch code to filename
-                imgsrc_filename = f'{branch_code}_{patient_name}_{index}.jpg'
-                
-                # Store file in GridFS with additional metadata
-                imgsrc_id = fs.put(
-                    imgsrc_file, 
-                    filename=imgsrc_filename,
-                    patient_name=patient_name,
-                    branch_code=branch_code
-                )
-                uploaded_files.append(imgsrc_filename)
-                
-            return HttpResponse(f'Images uploaded successfully: {", ".join(uploaded_files)}')
-        return HttpResponseBadRequest('No image files provided')
-    return HttpResponseBadRequest('Invalid request method')
-
-
-@csrf_exempt
-def get_file(request):
-    """
-    View to retrieve a file from MongoDB GridFS.
-    This view handles GET requests to retrieve a file from MongoDB GridFS based on the provided filename.
-    Args:
-        request (HttpRequest): The HTTP request object containing the filename to retrieve.
-    Returns:
-        HttpResponse: An HTTP response containing the file contents or a 404 error if the file is not found.
-    """
-    # Connect to MongoDB
-    client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
-    db = client['cosmetology']
-    fs = GridFS(db)
-    
-    # Get the filename and branch_code from the request parameters
-    filename = request.GET.get('filename')
-    branch_code = request.GET.get('branch_code')
-    
-    if not filename:
-        return HttpResponseBadRequest('filename is required')
-    if not branch_code:
-        return HttpResponseBadRequest('branch_code is required')
-    
-    # Find the file in MongoDB GridFS with matching branch_code
-    file = fs.find_one({"filename": filename, "branch_code": branch_code})
-    
-    if file is not None:
-        # Return the file contents as an HTTP response
-        response = HttpResponse(file.read())
-        response['Content-Type'] = 'application/octet-stream'
-        response['Content-Disposition'] = 'attachment; filename=%s' % file.filename
-        return response
-    else:
-        # Return a 404 error if the file is not found
-        return HttpResponse(status=404)
-
-
-@csrf_exempt
-def upload_pdf(request):
-    if request.method == 'POST':
-        patient_name = request.POST.get('patient_name')
-        branch_code = request.POST.get('branch_code')
-        
-        if not patient_name:
-            return HttpResponseBadRequest('patient_name is required')
-        if not branch_code:
-            return HttpResponseBadRequest('branch_code is required')
-        
-        if 'pdf_files' in request.FILES:
-            pdf_files = request.FILES.getlist('pdf_files')
-            uploaded_files = []
-            
-            for index, pdf_file in enumerate(pdf_files):
-                # Add branch code to filename
-                pdf_filename = f'{branch_code}_{patient_name}_{index}.pdf'
-                
-                # Store file in GridFS with additional metadata
-                pdf_id = fs.put(
-                    pdf_file, 
-                    filename=pdf_filename,
-                    patient_name=patient_name,
-                    branch_code=branch_code
-                )
-                uploaded_files.append(pdf_filename)
-                
-            return HttpResponse(f'PDFs uploaded successfully: {", ".join(uploaded_files)}')
-        return HttpResponseBadRequest('No PDF files provided')
-    return HttpResponseBadRequest('Invalid request method')
-
-
-@csrf_exempt
-def get_pdf_file(request):
-    """
-    View to retrieve a PDF file from MongoDB GridFS.
-    This view handles GET requests to retrieve a PDF file from MongoDB GridFS based on the provided filename.
-    Args:
-        request (HttpRequest): The HTTP request object containing the filename to retrieve.
-    Returns:
-        HttpResponse: An HTTP response containing the PDF file contents or a 404 error if the file is not found.
-    """
-    # Connect to MongoDB
-    client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
-    db = client['cosmetology']
-    fs = GridFS(db)
-
-    # Get the filename and branch_code from the request parameters
-    filename = request.GET.get('filename')
-    branch_code = request.GET.get('branch_code')
-    
-    if not filename:
-        return HttpResponseBadRequest('filename is required')
-    if not branch_code:
-        return HttpResponseBadRequest('branch_code is required')
-    
-    # Find the file in MongoDB GridFS with matching branch_code
-    file = fs.find_one({"filename": filename, "branch_code": branch_code})
-
-    if file is not None:
-        # Return the PDF file contents as an HTTP response
-        response = HttpResponse(file.read())
-        response['Content-Type'] = 'application/pdf'
-        response['Content-Disposition'] = 'attachment; filename=%s' % file.filename
-        return response
-    else:
-        # Return a 404 error if the PDF file is not found
-        return HttpResponse(status=404)
