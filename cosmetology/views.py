@@ -916,31 +916,6 @@ def SummaryDetailCreate(request):
 
 
 @api_view(['GET'])
-def PatientDetailsView(request):
-    try:
-        date_str = request.GET.get('appointmentDate')
-        branch_code = request.query_params.get('branch_code')
-        
-        if not date_str:
-            return Response({'error': 'appointmentDate is required'}, status=status.HTTP_400_BAD_REQUEST)
-        if not branch_code:
-            return Response({'error': 'branch_code is required'}, status=status.HTTP_400_BAD_REQUEST)
-            
-        date = datetime.strptime(date_str, '%Y-%m-%d').date()
-        
-        # Query SummaryDetail objects based on date and branch_code
-        summaries = SummaryDetail.objects.filter(appointmentDate=date, branch_code=branch_code)
-            
-        # Serialize the queryset
-        serializer = SummaryDetailSerializer(summaries, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
-    except ValueError:
-        return Response({'error': 'Invalid date format. Expected YYYY-MM-DD'}, status=status.HTTP_400_BAD_REQUEST)
-    except Exception as e:
-        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-
-@api_view(['GET'])
 def get_medicine_price(request):
     try:
         # Fetch query parameters
@@ -985,123 +960,152 @@ def get_medicine_price(request):
 
     except Exception as e:
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    
 
 from django.db.models import Q
 @api_view(['GET'])
-def get_stored_bill(request):
+def get_patientbilling_data(request):
     """
-    Enhanced endpoint to get stored billing data with flexible parameter handling
-    Supports both specific patient queries and date-based queries
+    Unified endpoint to fetch billing data, with fallback to summary details
     """
     try:
-        # Get parameters
+        # Extract query params
         patientUID = request.GET.get('patientUID')
         appointmentDate = request.GET.get('appointmentDate')
         branch_code = request.GET.get('branch_code')
-        
-        # Validate required parameters based on query type
-        if not appointmentDate or not branch_code:
-            return Response({
-                "error": "appointmentDate and branch_code are required parameters"
-            }, status=status.HTTP_400_BAD_REQUEST)
-        
-        # Build base query
-        base_query = Q(
-            appointmentDate=appointmentDate,
-            branch_code=branch_code
-        )
-        
-        # If patientUID is provided, add it to the query for specific patient data
+
+        # Validate mandatory fields
+        if not appointmentDate:
+            return Response({'error': 'appointmentDate is required'}, status=status.HTTP_400_BAD_REQUEST)
+        if not branch_code:
+            return Response({'error': 'branch_code is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Parse date
+        try:
+            date_obj = datetime.strptime(appointmentDate, '%Y-%m-%d').date()
+        except ValueError:
+            return Response({'error': 'Invalid date format. Expected YYYY-MM-DD'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Prepare base query
+        base_query = Q(appointmentDate=appointmentDate, branch_code=branch_code)
+
         if patientUID:
             base_query &= Q(patientUID=patientUID)
-            
-            # For specific patient query, return single record or 204
+            # Try billing data for patient
             billing = BillingData.objects.filter(base_query).last()
-            
             if billing:
                 serializer = BillingDataSerializer(billing)
-                return Response(serializer.data, status=status.HTTP_200_OK)
-            else:
-                return Response({
-                    "message": "No billing data found for this patient"
-                }, status=status.HTTP_204_NO_CONTENT)
-        
-        else:
-            # For date-based query without patientUID, return all records for that date
-            billings = BillingData.objects.filter(base_query).exclude(patient_handledby="N/A").order_by('-appointmentDate')
+                return Response({'source': 'billing', 'data': serializer.data}, status=status.HTTP_200_OK)
 
-            
+            # Fallback to summary detail
+            summary = SummaryDetail.objects.filter(base_query).last()
+            if summary:
+                serializer = SummaryDetailSerializer(summary)
+                return Response({'source': 'summary', 'data': serializer.data}, status=status.HTTP_200_OK)
+
+            return Response({'message': 'No data found for this patient'}, status=status.HTTP_204_NO_CONTENT)
+
+        else:
+            # Try billing data for date + branch
+            billings = BillingData.objects.filter(base_query).exclude(patient_handledby="N/A").order_by('-appointmentDate')
             if billings.exists():
                 serializer = BillingDataSerializer(billings, many=True)
-                return Response(serializer.data, status=status.HTTP_200_OK)
-            else:
-                return Response({
-                    "message": "No billing data found for this date",
-                    "data": []
-                }, status=status.HTTP_200_OK)  # Return 200 with empty data instead of 204
-                
+                return Response({'source': 'billing', 'data': serializer.data}, status=status.HTTP_200_OK)
+
+            # Fallback to summary
+            summaries = SummaryDetail.objects.filter(appointmentDate=date_obj, branch_code=branch_code)
+            if summaries.exists():
+                serializer = SummaryDetailSerializer(summaries, many=True)
+                return Response({'source': 'summary', 'data': serializer.data}, status=status.HTTP_200_OK)
+
+            return Response({'message': 'No data found for this date', 'data': []}, status=status.HTTP_200_OK)
+
     except Exception as e:
-        logger.error(f"Error in get_stored_bill: {str(e)}")
-        return Response({
-            "error": f"Internal server error: {str(e)}"
-        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        logger.error(f"Error in get_patient_data: {str(e)}")
+        return Response({'error': f"Internal server error: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @api_view(['GET'])
-def get_stored_procedurebill(request):
-    """
-    Enhanced endpoint to get stored procedure billing data with flexible parameter handling
-    Supports both specific patient queries and date-based queries
-    """
+def get_patient_procedurebill_data(request):
     try:
         # Get parameters
         patientUID = request.GET.get('patientUID')
         appointmentDate = request.GET.get('appointmentDate')
         branch_code = request.GET.get('branch_code')
-        
-        # Validate required parameters based on query type
+
+        # Validate required parameters
         if not appointmentDate or not branch_code:
             return Response({
                 "error": "appointmentDate and branch_code are required parameters"
             }, status=status.HTTP_400_BAD_REQUEST)
-        
-        # Build base query
-        base_query = Q(
-            appointmentDate=appointmentDate,
-            branch_code=branch_code
-        )
-        
-        # If patientUID is provided, add it to the query for specific patient data
+
+        base_query = Q(appointmentDate=appointmentDate, branch_code=branch_code)
+
+        # ─── Step 1: Try fetching from ProcedureBill ─────────────────────────────────
         if patientUID:
             base_query &= Q(patientUID=patientUID)
-            
-            # For specific patient query, return single record or 204
             procedure_bill = ProcedureBill.objects.filter(base_query).last()
-            
             if procedure_bill:
                 serializer = ProcedureBillSerializer(procedure_bill)
                 return Response(serializer.data, status=status.HTTP_200_OK)
-            else:
-                return Response({
-                    "message": "No procedure bill data found for this patient"
-                }, status=status.HTTP_204_NO_CONTENT)
-        
         else:
-            # For date-based query without patientUID, return all records for that date
             procedure_bills = ProcedureBill.objects.filter(base_query).exclude(patient_handledby="N/A").order_by('-appointmentDate')
-
-            
             if procedure_bills.exists():
                 serializer = ProcedureBillSerializer(procedure_bills, many=True)
                 return Response(serializer.data, status=status.HTTP_200_OK)
-            else:
-                return Response({
-                    "message": "No procedure bill data found for this date",
-                    "data": []
-                }, status=status.HTTP_200_OK)  # Return 200 with empty data instead of 204
-                
+
+        # ─── Step 2: Fall back to SummaryDetail if no ProcedureBill data ──────────────
+        try:
+            date = datetime.strptime(appointmentDate, '%Y-%m-%d').date()
+        except ValueError:
+            return Response({'error': 'Invalid date format. Expected YYYY-MM-DD'}, status=status.HTTP_400_BAD_REQUEST)
+
+        summary_query = SummaryDetail.objects.filter(
+            appointmentDate=date,
+            branch_code=branch_code
+        )
+
+        if patientUID:
+            summary_query = summary_query.filter(patientUID=patientUID)
+
+        detailed_records = {}
+        for detail in summary_query:
+            if not detail.proceduresList.strip():
+                continue
+
+            procedures = detail.proceduresList.split('\n')
+            uid = detail.patientUID
+            if uid not in detailed_records:
+                detailed_records[uid] = {
+                    'patientUID': uid,
+                    'patientName': detail.patientName,
+                    'appointmentDate': detail.appointmentDate,
+                    'patient_handledby': detail.patient_handledby,
+                    'procedures': []
+                }
+            for procedure in procedures:
+                if procedure.strip():
+                    parts = procedure.split(' - Date: ')
+                    if len(parts) == 2:
+                        name = parts[0].replace('Procedure: ', '').strip()
+                        proc_date = parts[1].strip()
+                        detailed_records[uid]['procedures'].append({
+                            'procedure': name,
+                            'procedureDate': proc_date
+                        })
+
+        # Return fallback summary data
+        response_data = list(detailed_records.values())
+        if response_data:
+            return Response({'detailedRecords': response_data}, status=status.HTTP_200_OK)
+        else:
+            return Response({
+                "message": "No procedure billing or summary data found",
+                "data": []
+            }, status=status.HTTP_200_OK)
+
     except Exception as e:
-        logger.error(f"Error in get_stored_procedurebill: {str(e)}")
+        logger.error(f"Error in get_procedure_bill_or_summary: {str(e)}")
         return Response({
             "error": f"Internal server error: {str(e)}"
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
