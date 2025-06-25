@@ -927,18 +927,30 @@ def get_medicine_price(request):
         if not branch_code:
             return Response({'error': 'branch_code is required'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Filter the queryset
+        # Base filter on branch_code
         medicines = Pharmacy.objects.filter(branch_code=branch_code)
 
+        # Handle medicine_name filtering
         if medicine_name:
-            medicines = medicines.filter(medicine_name__iexact=medicine_name)
+            medicine_name = medicine_name.strip()
+            exact_match = medicines.filter(medicine_name=medicine_name)
+            if exact_match.exists():
+                medicines = exact_match
+            else:
+                fallback_match = medicines.filter(medicine_name__icontains=medicine_name)
+                if fallback_match.exists():
+                    medicines = fallback_match
+                else:
+                    return Response({'message': 'No medicines found matching the criteria'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Optional batch number filtering
         if batch_number:
             medicines = medicines.filter(batch_number=batch_number)
 
         if not medicines.exists():
             return Response({'message': 'No medicines found matching the criteria'}, status=status.HTTP_404_NOT_FOUND)
 
-        # Build response list
+        # Build response data
         response_data = []
         for med in medicines:
             response_data.append({
