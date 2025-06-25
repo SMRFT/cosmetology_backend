@@ -1840,7 +1840,7 @@ def post_procedures_bill(request):
         consumer = data.get('consumer')  # Ensure this is a valid JSON object
         branch_code = data.get('branch_code')
         payment_type = data.get('PaymentType')
-
+        consultationFee = data.get('consultationFee')
         # Validate required fields
         if not patientUID:
             return JsonResponse({'error': 'patientUID is required'}, status=400)
@@ -1852,17 +1852,14 @@ def post_procedures_bill(request):
             return JsonResponse({'error': 'branch_code is required'}, status=400)
         if not payment_type:
             return JsonResponse({'error': 'PaymentType is required'}, status=400)
-
         # Generate serial numbers for both consumer and procedure
         consumer_bill_number = generate_serial_number(payment_type, 'Consumer')
         procedure_bill_number = generate_serial_number(payment_type, 'Procedure')
-
         # Validate the JSON fields
         if isinstance(procedures, str):
             procedures = json.loads(procedures)
         if isinstance(consumer, str):
             consumer = json.loads(consumer)
-
         # Save the billing data
         billing_data = ProcedureBill(
             patientUID=patientUID,
@@ -1877,9 +1874,9 @@ def post_procedures_bill(request):
             PaymentType=payment_type,
             procedureBillNumber=procedure_bill_number,
             branch_code=branch_code,
+            consultationFee=consultationFee
         )
         billing_data.save()
-
         return JsonResponse({'success': 'Billing data saved successfully!', 'consumerBillNumber': consumer_bill_number, 'procedureBillNumber': procedure_bill_number}, status=201)
     except Exception as e:
         return JsonResponse({'error': str(e)}, status=400)

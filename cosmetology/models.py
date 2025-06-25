@@ -202,7 +202,8 @@ class ProcedureBill(AuditModel):
     PaymentType = models.CharField(max_length=10, choices=[('Cash', 'Cash'), ('Card', 'Card')])
     consumerBillNumber = models.CharField(max_length=50)
     procedureBillNumber = models.CharField(max_length=50)
-
+    consultationFee = models.CharField(max_length=500, blank=True, null=True)
+    
 
 class Diagnosis(AuditModel):
     diagnosis= models.CharField(max_length=100)
