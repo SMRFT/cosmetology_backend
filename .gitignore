@@ -1,15 +1,26 @@
-# Python cache files
+# Python bytecode and cache
 __pycache__/
 *.py[cod]
 
-# VSCode or IDE folders (optional)
+# Virtual environments
+venv/
+env/
+
+# Environment variable files
+.env
+
+# Editor folders
 .vscode/
 .idea/
 
-# OS files (optional)
+# OS files
 .DS_Store
+Thumbs.db
 
-# Environment files (optional)
-.env
+# Log files
+*.log
 
-venv/
+# Django migrations
+**/migrations/
+!*/migrations/__init__.py
+
