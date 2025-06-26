@@ -733,46 +733,70 @@ def Appointmentpost(request):
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     
-
+    
 @csrf_exempt
 @api_view(['GET'])
 def get_doctors(request):
     """
-    API endpoint to get users filtered by role (Doctor or Admin) and optionally by branch_code
+    API endpoint to get users with role Doctor/Admin,
+    filtered by branch_code (active only)
     """
     if request.method == 'GET':
         try:
             from pymongo import MongoClient
             import os
-        
+
+            branch_code_filter = request.GET.get('branch_code')
+
             # Connect to MongoDB
             client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
             db = client['cosmetology']
             collection = db['cosmetology_register']
-            # Build query filter
-            query_filter = {
-                "role": {"$in": ["Doctor", "Admin"]},
-            }
-            # Fetch from DB
-            doctors = list(collection.find(query_filter, {
+
+            # Fetch all doctors/admins
+            all_users = collection.find({
+                "role": {"$in": ["Doctor", "Admin"]}
+            }, {
                 "_id": 0,
                 "id": 1,
                 "name": 1,
                 "role": 1,
                 "branch_code": 1,
                 "contact": 1
-            }))
+            })
+
+            # Filter by branch_code if provided
+            filtered_users = []
+            for user in all_users:
+                try:
+                    branch_code_list = json.loads(user.get('branch_code', '[]'))
+                except json.JSONDecodeError:
+                    continue  # Skip invalid JSON
+
+                if branch_code_filter:
+                    for entry in branch_code_list:
+                        if (
+                            entry.get('branch_code') == branch_code_filter and
+                            entry.get('isactive') == True
+                        ):
+                            filtered_users.append(user)
+                            break  # No need to check further
+                else:
+                    filtered_users.append(user)
+
             return Response({
                 "success": True,
-                "doctors": doctors,
-                "count": len(doctors)
+                "doctors": filtered_users,
+                "count": len(filtered_users)
             }, status=status.HTTP_200_OK)
+
         except Exception as e:
             return Response({
                 "success": False,
                 "error": "Failed to fetch doctors and admins",
                 "details": str(e)
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
 
 # Updated Appointment View to include doctor filtering
 @api_view(['GET'])
