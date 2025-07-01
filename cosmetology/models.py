@@ -57,7 +57,7 @@ class Pharmacy(AuditModel):
     CGST_value = models.CharField(max_length=200,null=True, blank=True)
     SGST_percentage = models.CharField(max_length=200,null=True, blank=True)
     SGST_value = models.CharField(max_length=200,null=True, blank=True)
-    stock = models.IntegerField(null=True, blank=True)
+    stock = models.IntegerField(null=True, blank=True) 
     received_date = models.DateField(null=True, blank=True)
     expiry_date = models.DateField(null=True, blank=True)
     batch_number = models.CharField(max_length=255,null=True, blank=True)

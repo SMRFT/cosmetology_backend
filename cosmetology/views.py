@@ -1918,23 +1918,94 @@ def post_procedures_bill(request):
         return JsonResponse({'error': str(e)}, status=400)
 
 
+
+from collections import defaultdict
 @csrf_exempt
 def medical_history(request):
     if request.method == 'POST':
         data = json.loads(request.body)
         patientUID = data.get('id')
         branch_code = data.get('branch_code')
-        
-        if not patientUID:
-            return JsonResponse({'error': 'patientUID is required'}, status=400)
-        if not branch_code:
-            return JsonResponse({'error': 'branch_code is required'}, status=400)
-            
-        # Filter with branch_code
-        patient_details = SummaryDetail.objects.filter(
-            patientUID=patientUID,
-            branch_code=branch_code
-        ).values()
-            
-        return JsonResponse(list(patient_details), safe=False)
-        
+
+        if not patientUID or not branch_code:
+            return JsonResponse({'error': 'patientUID and branch_code are required'}, status=400)
+
+        # Fetch records from all models
+        summary_qs = SummaryDetail.objects.filter(patientUID=patientUID, branch_code=branch_code).values()
+        billing_qs = BillingData.objects.filter(patientUID=patientUID, branch_code=branch_code).values()
+        procedure_qs = ProcedureBill.objects.filter(patientUID=patientUID, branch_code=branch_code).values()
+
+        # Group records by appointmentDate
+        history_map = defaultdict(lambda: {
+            "appointmentDate": "",
+            "summary": None,
+            "billing": None,
+            "procedure": None
+        })
+
+        for item in summary_qs:
+            date = item.get('appointmentDate')
+            history_map[date]['appointmentDate'] = date
+            history_map[date]['summary'] = item
+
+        for item in billing_qs:
+            date = item.get('appointmentDate')
+            history_map[date]['appointmentDate'] = date
+            history_map[date]['billing'] = item
+
+        for item in procedure_qs:
+            date = item.get('appointmentDate')
+            history_map[date]['appointmentDate'] = date
+            history_map[date]['procedure'] = item
+
+        merged_result = []
+
+        for date, data in history_map.items():
+            summary = data['summary']
+            billing = data['billing']
+            procedure = data['procedure']
+
+            # Case 1: All three exist → only show summary
+            if summary and billing and procedure:
+                merged_result.append({
+                    "appointmentDate": date,
+                    "summary": summary,
+                    "billing": None,
+                    "procedure": None,
+                    "type": "summary_only"
+                })
+
+            # Case 2: Billing & Procedure both exist with "N/A"
+            elif billing and procedure and billing.get("patient_handledby") == "N/A" and procedure.get("patient_handledby") == "N/A":
+                # Case 3: Also summary exists → merge all
+                if summary:
+                    merged_result.append({
+                        "appointmentDate": date,
+                        "summary": summary,
+                        "billing": billing,
+                        "procedure": procedure,
+                        "type": "merged_all"
+                    })
+                else:
+                    merged_result.append({
+                        "appointmentDate": date,
+                        "summary": None,
+                        "billing": billing,
+                        "procedure": procedure,
+                        "type": "merged_billing_procedure"
+                    })
+
+            # Otherwise show individual records
+            else:
+                merged_result.append({
+                    "appointmentDate": date,
+                    "summary": summary,
+                    "billing": billing,
+                    "procedure": procedure,
+                    "type": "individual"
+                })
+
+        # Sort by date descending
+        result = sorted(merged_result, key=lambda x: x['appointmentDate'], reverse=True)
+
+        return JsonResponse(result, safe=False)
