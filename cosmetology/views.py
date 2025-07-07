@@ -743,9 +743,6 @@ def get_doctors(request):
     """
     if request.method == 'GET':
         try:
-            from pymongo import MongoClient
-            import os
-
             branch_code_filter = request.GET.get('branch_code')
 
             # Connect to MongoDB
@@ -802,23 +799,25 @@ def get_doctors(request):
 @api_view(['GET'])
 def AppointmentView(request):
     if request.method == 'GET':
-        # Get branch_code and doctor filter from request parameters
         branch_code = request.query_params.get('branch_code')
-        doctor_name = request.query_params.get('doctor_name')
-        
+        doctor_name = request.query_params.get('doctor_name')  # optional
+        role = request.query_params.get('role')  # either 'Admin' or 'Doctor'
+
         if not branch_code:
             return Response({'error': 'branch_code is required'}, status=status.HTTP_400_BAD_REQUEST)
-        
-        # Start with base queryset
-        data = Appointment.objects.filter(branch_code=branch_code)
-        
-        # Filter by doctor name if provided
-        if doctor_name:
-            data = data.filter(patient_handledby=doctor_name)
-            
-        serializer = AppointmentSerializer(data, many=True)
+
+        # Base query filtered by branch
+        queryset = Appointment.objects.filter(branch_code=branch_code)
+
+        # If role is Doctor, further filter by doctor_name
+        if role == 'Doctor':
+            if not doctor_name:
+                return Response({'error': 'doctor_name is required for Doctor role'}, status=status.HTTP_400_BAD_REQUEST)
+            queryset = queryset.filter(patient_handledby__iexact=doctor_name.strip())
+
+        serializer = AppointmentSerializer(queryset, many=True)
         return Response(serializer.data)
-        
+            
 
 @api_view(['POST', 'GET', 'PATCH'])
 def SummaryDetailCreate(request):
@@ -1910,90 +1909,91 @@ def post_procedures_bill(request):
 from collections import defaultdict
 @csrf_exempt
 def medical_history(request):
-    if request.method == 'POST':
-        data = json.loads(request.body)
-        patientUID = data.get('id')
-        branch_code = data.get('branch_code')
+    if request.method != 'POST':
+        return JsonResponse({'error': 'Invalid request method'}, status=405)
 
-        if not patientUID or not branch_code:
-            return JsonResponse({'error': 'patientUID and branch_code are required'}, status=400)
+    data = json.loads(request.body)
+    patientUID = data.get('id')
+    branch_code = data.get('branch_code')
 
-        # Fetch records from all models
-        summary_qs = SummaryDetail.objects.filter(patientUID=patientUID, branch_code=branch_code).values()
-        billing_qs = BillingData.objects.filter(patientUID=patientUID, branch_code=branch_code).values()
-        procedure_qs = ProcedureBill.objects.filter(patientUID=patientUID, branch_code=branch_code).values()
+    if not patientUID or not branch_code:
+        return JsonResponse({'error': 'patientUID and branch_code are required'}, status=400)
 
-        # Group records by appointmentDate
-        history_map = defaultdict(lambda: {
-            "appointmentDate": "",
-            "summary": None,
-            "billing": None,
-            "procedure": None
-        })
+    summary_qs = SummaryDetail.objects.filter(patientUID=patientUID, branch_code=branch_code).values()
+    billing_qs = BillingData.objects.filter(patientUID=patientUID, branch_code=branch_code).values()
+    procedure_qs = ProcedureBill.objects.filter(patientUID=patientUID, branch_code=branch_code).values()
 
-        for item in summary_qs:
-            date = item.get('appointmentDate')
-            history_map[date]['appointmentDate'] = date
-            history_map[date]['summary'] = item
+    history_map = defaultdict(lambda: {
+        "appointmentDate": "",
+        "summary": None,
+        "billing": None,
+        "procedure": None
+    })
 
-        for item in billing_qs:
-            date = item.get('appointmentDate')
-            history_map[date]['appointmentDate'] = date
-            history_map[date]['billing'] = item
+    for item in summary_qs:
+        date = item.get('appointmentDate')
+        history_map[date]['appointmentDate'] = date
+        history_map[date]['summary'] = item
 
-        for item in procedure_qs:
-            date = item.get('appointmentDate')
-            history_map[date]['appointmentDate'] = date
-            history_map[date]['procedure'] = item
+    for item in billing_qs:
+        date = item.get('appointmentDate')
+        history_map[date]['appointmentDate'] = date
+        history_map[date]['billing'] = item
 
-        merged_result = []
+    for item in procedure_qs:
+        date = item.get('appointmentDate')
+        history_map[date]['appointmentDate'] = date
+        history_map[date]['procedure'] = item
 
-        for date, data in history_map.items():
-            summary = data['summary']
-            billing = data['billing']
-            procedure = data['procedure']
+    merged_result = []
 
-            # Case 1: All three exist → only show summary
-            if summary and billing and procedure:
-                merged_result.append({
-                    "appointmentDate": date,
-                    "summary": summary,
-                    "billing": None,
-                    "procedure": None,
-                    "type": "summary_only"
-                })
+    for date, data in history_map.items():
+        summary = data['summary']
+        billing = data['billing']
+        procedure = data['procedure']
 
-            # Case 2: Billing & Procedure both exist with "N/A"
-            elif billing and procedure and billing.get("patient_handledby") == "N/A" and procedure.get("patient_handledby") == "N/A":
-                # Case 3: Also summary exists → merge all
-                if summary:
-                    merged_result.append({
-                        "appointmentDate": date,
-                        "summary": summary,
-                        "billing": billing,
-                        "procedure": procedure,
-                        "type": "merged_all"
-                    })
-                else:
-                    merged_result.append({
-                        "appointmentDate": date,
-                        "summary": None,
-                        "billing": billing,
-                        "procedure": procedure,
-                        "type": "merged_billing_procedure"
-                    })
+        billing_NA = billing and billing.get("patient_handledby") == "N/A"
+        procedure_NA = procedure and procedure.get("patient_handledby") == "N/A"
 
-            # Otherwise show individual records
-            else:
-                merged_result.append({
-                    "appointmentDate": date,
-                    "summary": summary,
-                    "billing": billing,
-                    "procedure": procedure,
-                    "type": "individual"
-                })
+        # CASE 1: If summary exists → show only summary (even if billing/procedure exist)
+        if summary:
+            merged_result.append({
+                "appointmentDate": date,
+                "summary": summary,
+                "billing": None,
+                "procedure": None,
+                "type": "summary_only"
+            })
+        # CASE 2: No summary, but billing & procedure both exist and both are N/A
+        elif billing_NA and procedure_NA:
+            merged_result.append({
+                "appointmentDate": date,
+                "summary": None,
+                "billing": billing,
+                "procedure": procedure,
+                "type": "billing_procedure_NA"
+            })
+        # CASE 3: No summary, only billing with N/A
+        elif billing_NA and not procedure:
+            merged_result.append({
+                "appointmentDate": date,
+                "summary": None,
+                "billing": billing,
+                "procedure": None,
+                "type": "billing_only_NA"
+            })
+        # CASE 4: No summary, only procedure with N/A
+        elif procedure_NA and not billing:
+            merged_result.append({
+                "appointmentDate": date,
+                "summary": None,
+                "billing": None,
+                "procedure": procedure,
+                "type": "procedure_only_NA"
+            })
+        # CASE 5: No valid data (or invalid handled by someone else)
+        else:
+            continue  # Skip cases not meeting the conditions
 
-        # Sort by date descending
-        result = sorted(merged_result, key=lambda x: x['appointmentDate'], reverse=True)
-
-        return JsonResponse(result, safe=False)
+    result = sorted(merged_result, key=lambda x: x['appointmentDate'], reverse=True)
+    return JsonResponse(result, safe=False)
