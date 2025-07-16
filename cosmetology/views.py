@@ -694,6 +694,7 @@ def Appointmentpost(request):
     if request.method == 'POST':
         patient_uid = request.data.get('patientUID')
         appointment_date = request.data.get('appointmentDate')
+        appointment_time = request.data.get('appointmentTime')
         branch_code = request.data.get('branch_code')
         
         # Validate required fields
@@ -701,6 +702,8 @@ def Appointmentpost(request):
             return Response({"error": "patientUID is required"}, status=status.HTTP_400_BAD_REQUEST)
         if not appointment_date:
             return Response({"error": "appointmentDate is required"}, status=status.HTTP_400_BAD_REQUEST)
+        if not appointment_time:
+            return Response({"error": "appointmentTime is required"}, status=status.HTTP_400_BAD_REQUEST)
         if not branch_code:
             return Response({"error": "branch_code is required"}, status=status.HTTP_400_BAD_REQUEST)
         
@@ -720,6 +723,16 @@ def Appointmentpost(request):
         
         if existing_appointment:
             return Response({"error": f"Patient already has an appointment on {appointment_date}"}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Check if the time slot is already booked by any patient on the same date and branch
+        time_slot_booked = Appointment.objects.filter(
+            appointmentDate=appointment_date,
+            appointmentTime=appointment_time,
+            branch_code=branch_code
+        ).first()
+        
+        if time_slot_booked:
+            return Response({"error": f"Time slot {appointment_time} is already booked for {appointment_date}"}, status=status.HTTP_400_BAD_REQUEST)
         
         # Add patient details and branch_code to the request data
         request.data['purposeOfVisit'] = patient.purposeOfVisit
