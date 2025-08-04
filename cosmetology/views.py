@@ -21,6 +21,7 @@ from django.views.decorators.http import require_GET
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from rest_framework import status
+from dateutil.parser import isoparse
 from pymongo import MongoClient
 import logging
 import traceback
@@ -745,6 +746,44 @@ def Appointmentpost(request):
             appointment = serializer.save()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+
+@api_view(['DELETE'])
+def cancel_appointment(request):
+    # Setup MongoDB client
+    client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+    db = client['cosmetology']
+    appointment_collection = db.cosmetology_appointment
+    try:
+        patient_uid = request.data.get('patientUID')
+        appointment_date = request.data.get('appointmentDate')
+        appointment_time = request.data.get('appointmentTime')
+        branch_code = request.data.get('branch_code')
+
+        if not all([patient_uid, appointment_date, appointment_time, branch_code]):
+            return Response({"error": "All fields are required"}, status=400)
+
+        # Parse any valid ISO date string
+        try:
+            date_obj = isoparse(appointment_date).replace(hour=0, minute=0, second=0, microsecond=0)
+        except Exception:
+            return Response({"error": "Invalid date format"}, status=400)
+
+        result = appointment_collection.delete_one({
+            "patientUID": patient_uid,
+            "appointmentDate": date_obj,
+            "appointmentTime": appointment_time,
+            "branch_code": branch_code
+        })
+
+        if result.deleted_count == 0:
+            return Response({"error": "Appointment not found"}, status=404)
+
+        return Response({"message": "Appointment canceled successfully"}, status=200)
+
+    except Exception as e:
+        return Response({"error": str(e)}, status=500)
     
     
 @csrf_exempt

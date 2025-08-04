@@ -15,6 +15,7 @@ urlpatterns = [
     path('patients/<str:patientUID>/', views.PatientView, name='patient-detail'),
     path('Appointmentpost/', views.Appointmentpost, name='Appointmentpost'),
     path('AppointmentView/', views.AppointmentView, name='AppointmentView'),
+    path('appointment/cancel/', views.cancel_appointment, name='cancel_appointment'),
     path('get_doctors/', views.get_doctors, name='get_doctors'),
     path('summary/post/', views.SummaryDetailCreate, name='summary-create'),
     path('summary_get/', views.summary_get, name='summary_get'),
