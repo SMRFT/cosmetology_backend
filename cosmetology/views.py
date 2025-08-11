@@ -326,14 +326,15 @@ def get_branches(request):
         return Response({'error': 'An internal server error occurred.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         
 
-from bson import ObjectId
+import os
+import logging
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
 @api_view(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'])
 def pharmacy_data(request):
     branch_code = request.query_params.get('branch_code')
-
     if request.method in ['GET', 'POST', 'PUT', 'PATCH'] and not branch_code:
         logger.warning("Missing branch_code in request: 400 BAD REQUEST")
         return Response({'error': 'branch_code is required'}, status=status.HTTP_400_BAD_REQUEST)
@@ -368,32 +369,52 @@ def pharmacy_data(request):
                 item.pop('_id', None)
                 if not item.get('branch_code') and branch_code:
                     item['branch_code'] = branch_code
-                
-                # Convert new_stock to stock for new entries
+
+                # Convert new_stock to stock for new entries (this part is for consistency,
+                # but frontend sends 'stock' for new entries)
                 if 'new_stock' in item:
                     item['stock'] = int(item.get('new_stock', 0))
                     item.pop('new_stock', None)
-                
+
                 # Remove old_stock and total_stock if present (legacy fields)
                 item.pop('old_stock', None)
                 item.pop('total_stock', None)
-                
-                # Ensure stock field exists
+
+                # Ensure stock field exists (this might be redundant if 'stock' is always sent or 'new_stock' handled)
                 if 'stock' not in item:
                     item['stock'] = 0
-                
+
                 existing_record = pharmacy_collection.find_one({
                     "medicine_name": item.get("medicine_name"),
                     "batch_number": item.get("batch_number"),
                     "branch_code": item.get("branch_code")
                 })
                 if existing_record:
-                    # For existing records, add new stock to current stock
-                    current_stock = existing_record.get('stock', 0)
-                    item['stock'] = current_stock + item.get('stock', 0)
+                    # --- START OF NECESSARY CHANGE ---
+                    # When a POST request is for an existing record, the 'stock' value in the request
+                    # should now REPLACE the existing stock, not add to it.
+                    # This aligns with "whatever typed should be saved right?" for initial stock input.
+                    if 'stock' in item:
+                        item['stock'] = int(item.get('stock', 0)) # Changed from: current_stock + item.get('stock', 0)
+                    else:
+                        # If 'stock' is not explicitly provided in the POST data for an existing record,
+                        # retain its current stock value.
+                        item['stock'] = existing_record.get('stock', 0)
+                    # --- END OF NECESSARY CHANGE ---
+
                     pharmacy_collection.update_one({"_id": existing_record["_id"]}, {"$set": item})
                     updated_count += 1
                 else:
+                    # For truly new records, ensure stock is set from 'stock' field sent by frontend
+                    # or 'new_stock' if it were ever sent for new entries.
+                    if 'stock' in item: # Frontend sends 'stock' for new entries
+                        item['stock'] = int(item.get('stock', 0))
+                    elif 'new_stock' in item: # Fallback/consistency for 'new_stock'
+                        item['stock'] = int(item.get('new_stock', 0))
+                        item.pop('new_stock', None)
+                    else:
+                        item['stock'] = 0 # Default if neither is present
+
                     result = pharmacy_collection.insert_one(item)
                     inserted_ids.append(str(result.inserted_id))
             logger.info("POST request successful: 201 CREATED")
@@ -418,7 +439,7 @@ def pharmacy_data(request):
                 data['updated_at'] = datetime.now()
                 if not data.get('branch_code') and branch_code:
                     data['branch_code'] = branch_code
-                
+
                 # Handle stock update logic
                 if 'new_stock' in data and data['new_stock']:
                     existing_record = pharmacy_collection.find_one({"_id": ObjectId(_id)})
@@ -428,11 +449,11 @@ def pharmacy_data(request):
                         data['stock'] = current_stock + new_stock_value
                         # Remove new_stock from data as it's not stored in DB
                         data.pop('new_stock', None)
-                
+
                 # Remove legacy fields if present
                 data.pop('old_stock', None)
                 data.pop('total_stock', None)
-                
+
                 result = pharmacy_collection.update_one({"_id": ObjectId(_id)}, {"$set": data})
                 if result.matched_count:
                     updated_doc = pharmacy_collection.find_one({"_id": ObjectId(_id)})
@@ -463,20 +484,20 @@ def pharmacy_data(request):
                 if not data.get('branch_code') and branch_code:
                     data['branch_code'] = branch_code
                 data['updated_at'] = datetime.now()
-                
+
                 # Handle stock field for PUT requests
                 if 'new_stock' in data:
                     data['stock'] = int(data.get('new_stock', 0))
                     data.pop('new_stock', None)
-                
+
                 # Remove legacy fields if present
                 data.pop('old_stock', None)
                 data.pop('total_stock', None)
-                
+
                 # Ensure stock field exists
                 if 'stock' not in data:
                     data['stock'] = 0
-                
+
                 result = pharmacy_collection.update_one({"_id": ObjectId(_id)}, {"$set": data}, upsert=False)
                 if result.matched_count:
                     updated_doc = pharmacy_collection.find_one({"_id": ObjectId(_id)})
@@ -500,7 +521,7 @@ def pharmacy_data(request):
             if not _id:
                 logger.warning("DELETE request missing _id: 400 BAD REQUEST")
                 return Response({'error': '_id is required for DELETE'}, status=status.HTTP_400_BAD_REQUEST)
-            
+
             result = pharmacy_collection.delete_one({"_id": ObjectId(_id)})
             if result.deleted_count:
                 logger.info(f"DELETE request successful: Record {_id} deleted")
@@ -511,7 +532,6 @@ def pharmacy_data(request):
         except Exception as e:
             logger.error(f"Error deleting pharmacy data: {str(e)}")
             return Response({"detail": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
 
 
 # Setup MongoDB client

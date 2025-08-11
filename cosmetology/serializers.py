@@ -45,6 +45,7 @@ class RegisterSerializer(serializers.ModelSerializer):
         
         return Register.objects.create(**validated_data)
 
+
 class BranchStatusSerializer(serializers.Serializer):
     user_id = serializers.CharField()
     branch_code = serializers.CharField()
@@ -65,6 +66,7 @@ class PharmacySerializer(serializers.ModelSerializer):
     class Meta:
         model = Pharmacy
         fields = '__all__'
+        
 
 class PharmacyStockUpdateSerializer(serializers.ModelSerializer):
     class Meta:
