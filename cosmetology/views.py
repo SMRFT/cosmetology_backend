@@ -1584,9 +1584,9 @@ def generate_serial_number(payment_type, section):
     new_sequence = max(last_serial_billingdata, last_serial_procedurebill) + 1
 
     # Format the serial number as per the desired pattern
-    bill_number = f"{prefix}/{current_year}/{new_sequence:03d}"
+    bill_number = f"{prefix}/{current_year}/{new_sequence}"
     return bill_number
-
+    
 
 @api_view(['GET'])
 def summary_get(request):
