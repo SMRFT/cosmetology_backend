@@ -777,15 +777,16 @@ def PatientView(request):
 def Appointmentpost(request):
     try:
         # ==================================================
-        # ✅ GET DATA
+        # ✅ INIT
         # ==================================================
+        now = timezone.now()
+
         patient_uid = str(request.data.get('patientUID', '')).strip()
         appointment_date = str(request.data.get('appointmentDate', '')).strip()
         appointment_time = str(request.data.get('appointmentTime', '')).strip()
 
-        # ✅ GET BRANCH FROM HEADER (IMPORTANT)
-        branch_code = request.data.get("auth-branch-code")
-        user_id = request.data.get('auth-user-id') 
+        branch_code = request.data.get("auth-branch-code") or request.headers.get("Branch-Code")
+        user_id = request.headers.get("auth-user-id", "system")
 
         # ==================================================
         # ✅ VALIDATION
@@ -800,13 +801,13 @@ def Appointmentpost(request):
             return Response({"error": "appointmentTime is required"}, status=400)
 
         if not branch_code:
-            return Response({"error": "Branch-Code header is required"}, status=400)
+            return Response({"error": "Branch-Code is required"}, status=400)
 
         # ==================================================
-        # ✅ GET PATIENT (SAFE)
+        # ✅ GET PATIENT
         # ==================================================
         patient = None
-        for p in Patient.objects.filter(patientUID=patient_uid):
+        for p in Patient.objects.filter(patientUID=patient_uid, branch_code=branch_code):
             patient = p
             break
 
@@ -814,45 +815,44 @@ def Appointmentpost(request):
             return Response({"error": "Patient not found"}, status=404)
 
         # ==================================================
-        # ✅ CHECK EXISTING APPOINTMENT (DJONGO SAFE)
+        # ✅ FETCH ALL BRANCH APPOINTMENTS
+        # ✅ FIXED: Filter cancelled in Python — Djongo can't handle .exclude()
         # ==================================================
-        existing_appointment = None
+        all_appointments = Appointment.objects.filter(branch_code=branch_code)
+        active_appointments = [a for a in all_appointments if not a.is_cancelled]
 
-        for appt in Appointment.objects.all():
+        # ==================================================
+        # ✅ CHECK EXISTING PATIENT APPOINTMENT
+        # ==================================================
+        for appt in active_appointments:
+            appt_date_str = str(appt.appointmentDate)[:10]
+            input_date_str = appointment_date[:10]
+
             if (
                 str(appt.patientUID) == patient_uid and
-                str(appt.appointmentDate) == appointment_date and
-                str(appt.branch_code) == branch_code
+                appt_date_str == input_date_str
             ):
-                existing_appointment = appt
-                break
-
-        if existing_appointment:
-            return Response({
-                "error": f"Patient already has an appointment on {appointment_date}"
-            }, status=400)
+                return Response({
+                    "error": f"Patient already has an appointment on {appointment_date}"
+                }, status=400)
 
         # ==================================================
-        # ✅ CHECK TIME SLOT (DJONGO SAFE)
+        # ✅ CHECK TIME SLOT
         # ==================================================
-        time_slot_booked = None
+        for appt in active_appointments:
+            appt_date_str = str(appt.appointmentDate)[:10]
+            input_date_str = appointment_date[:10]
 
-        for appt in Appointment.objects.all():
             if (
-                str(appt.appointmentDate) == appointment_date and
-                str(appt.appointmentTime) == appointment_time and
-                str(appt.branch_code) == branch_code
+                appt_date_str == input_date_str and
+                str(appt.appointmentTime) == appointment_time
             ):
-                time_slot_booked = appt
-                break
-
-        if time_slot_booked:
-            return Response({
-                "error": f"Time slot {appointment_time} is already booked for {appointment_date}"
-            }, status=400)
+                return Response({
+                    "error": f"Time slot {appointment_time} is already booked for {appointment_date}"
+                }, status=400)
 
         # ==================================================
-        # ✅ BUILD CLEAN DATA (DO NOT MODIFY request.data)
+        # ✅ BUILD PAYLOAD
         # ==================================================
         payload = {
             "patientUID": patient_uid,
@@ -877,7 +877,7 @@ def Appointmentpost(request):
         serializer = AppointmentSerializer(data=payload)
 
         if serializer.is_valid():
-            appointment = serializer.save()
+            serializer.save()
             return Response(serializer.data, status=201)
 
         return Response(serializer.errors, status=400)
