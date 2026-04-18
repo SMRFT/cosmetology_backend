@@ -11,6 +11,7 @@ djangorestframework-simplejwt==4.8.0
 dnspython==2.6.1
 dotenv==0.9.9
 mongoengine==0.28.2
+pyauth @ git+https://github.com/ashokkumarta/pyauth.git@v2.0.3
 pycparser==2.22
 PyJWT==2.9.0
 pymongo==3.12.3
@@ -18,3 +19,7 @@ python-dotenv==1.1.0
 pytz==2024.1
 typing_extensions==4.12.2
 tzdata==2024.1
+django-stubs==5.2.8
+django-stubs-ext==5.2.8
+types-pyyaml==6.0.12.20250915
+requests==2.32.5
