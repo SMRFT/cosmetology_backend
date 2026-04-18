@@ -97,6 +97,7 @@ class Patient(AuditModel):
     language = models.CharField(max_length=10, blank=True, null=True)  # Optional
     purposeOfVisit = models.CharField(max_length=500, blank=True, null=True)  # Optional
     address = models.TextField(blank=True, null=True)  # Optional
+    is_deleted = models.BooleanField(default=False)  # New field to mark patient as deleted
     def save(self, *args, **kwargs):
         if not self.patientUID:
             last_patient = Patient.objects.all().values_list('patientUID', flat=True)
@@ -122,6 +123,7 @@ class Appointment(AuditModel):
     purposeOfVisit = models.CharField(max_length=500)
     gender = models.CharField(max_length=10)
     patient_handledby = models.CharField(max_length=100)
+    is_cancelled = models.BooleanField(default=False)
 
     def __str__(self):
         return self.patientUID

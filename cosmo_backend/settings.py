@@ -154,5 +154,10 @@ CORS_ALLOWED_ORIGINS = [
 CORS_ALLOW_CREDENTIALS = True
 
 CORS_ALLOW_HEADERS = [
-    'content-type'
+    'content-type',
+    'Authorization',
+    'Branch-Code'
 ]
+
+# Force restart to refresh permissions map - 18/Apr/2026 09:24
+
