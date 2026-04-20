@@ -2203,6 +2203,7 @@ def post_procedures_bill(request):
 
 from collections import defaultdict
 @csrf_exempt
+@api_view(['POST'])
 @permission_classes([HasRoleAndDataPermission])
 def medical_history(request):
     if request.method != 'POST':
