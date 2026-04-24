@@ -23,7 +23,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = 'django-insecure-^++i9_0$54xip#wtj3c#4qt&p1q2)q=n8difm*gjwsl49dc1na'
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = False
 
 ALLOWED_HOSTS = ['test.shinova.in', 'localhost','shinova.in',"shinova.in1.cloudlets.co.in"]
 
@@ -66,7 +66,7 @@ ROOT_URLCONF = 'cosmo_backend.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
+        'DIRS': [BASE_DIR / 'templates'],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
