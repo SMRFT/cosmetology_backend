@@ -25,7 +25,13 @@ SECRET_KEY = 'django-insecure-^++i9_0$54xip#wtj3c#4qt&p1q2)q=n8difm*gjwsl49dc1na
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = False
 
-ALLOWED_HOSTS = ['*']
+ALLOWED_HOSTS = [
+    'localhost',
+    'shinova.in',
+    'test.shinova.in',
+    'testcosmetology.shinova.in',
+    'shinova.in1.cloudlets.co.in'
+]
 
 
 # Application definition
@@ -51,14 +57,13 @@ REST_FRAMEWORK = {
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'corsheaders.middleware.CorsMiddleware',   # move here
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
-    'corsheaders.middleware.CorsMiddleware',
-    'django.middleware.common.CommonMiddleware',
 ]
 
 ROOT_URLCONF = 'cosmo_backend.urls'
@@ -147,7 +152,9 @@ STATIC_URL = '/static/'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 CORS_ALLOWED_ORIGINS = [
-    "http://localhost:3000","http://localhost:3001","https://testcosmetology.shinova.in"
+    "http://localhost:3000",
+    "http://localhost:3001",
+    "https://testcosmetology.shinova.in",
 ]
 
 CORS_ALLOW_CREDENTIALS = True
