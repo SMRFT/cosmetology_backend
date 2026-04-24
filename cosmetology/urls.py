@@ -1,5 +1,6 @@
 from django.urls import path , re_path
 from . import views
+handler404 = 'cosmetology.views.custom_page_not_found'
 
 urlpatterns = [
     path('registration/', views.registration, name='registration'),

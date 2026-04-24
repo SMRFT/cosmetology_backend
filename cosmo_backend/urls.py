@@ -1,5 +1,7 @@
 from django.contrib import admin
 from django.urls import include, path
+# project/urls.py
+handler404 = 'cosmetology.views.custom_page_not_found'
 
 urlpatterns = [
     path('admin/', admin.site.urls),

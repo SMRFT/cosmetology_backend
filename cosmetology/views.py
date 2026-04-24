@@ -33,6 +33,18 @@ from dotenv import load_dotenv
 load_dotenv() 
 from django.db import DatabaseError
 
+
+from django.shortcuts import render
+
+def custom_page_not_found(request, exception):
+    if 'application/json' in request.META.get('HTTP_ACCEPT', ''):
+        return JsonResponse({
+            'status': 'error',
+            'message': 'Page not found',
+            'details': 'The requested URL was not found on this server.'
+        }, status=404)
+    return render(request, 'errors/404.html', status=404)
+
 @csrf_exempt
 @api_view(['GET', 'POST'])
 @permission_classes([HasRoleAndDataPermission])
